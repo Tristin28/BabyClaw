@@ -60,7 +60,7 @@ class PlannerAgent(Agent):
         if missing_keys:
             raise ValueError(f"Missing planner_input keys: {missing_keys}")
 
-    def validate_llm_response(self, response: dict):
+    def validate_llm_response(self, response: dict, available_tools: list[str]):
         if not isinstance(response, dict):
             raise ValueError("Plan response must be a dictionary")
 
@@ -83,6 +83,9 @@ class PlannerAgent(Agent):
 
                 if not isinstance(step[field], expected_type):
                     raise ValueError(f"Step field '{field}' must be {expected_type.__name__}")
+            
+            if step["tool"] not in available_tools:
+                raise ValueError(f"Unknown tool '{step['tool']}' in plan")
 
     def get_plan(self, planner_input:dict) -> Message:
         ''' 
@@ -97,7 +100,7 @@ class PlannerAgent(Agent):
             messages = self.build_messages(planner_input)
             
             response = self.llm_client.invoke_json(messages,stream=False,schema=self.SCHEMA)
-            self.validate_llm_response(response)
+            self.validate_llm_response(response, planner_input["tools"])
 
             status = 'completed'
             target_agent = 'executor'
