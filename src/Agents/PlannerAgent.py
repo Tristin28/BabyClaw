@@ -3,7 +3,7 @@ from BaseAgent import Agent
 from message import Message
 
 class PlannerAgent(Agent):
-    #Class field,
+    #Class field
     SCHEMA = {
             "type": "object", #Helps llm know what type the response will be converted to
             "properties": { #following is what actually is sent 
@@ -19,7 +19,8 @@ class PlannerAgent(Agent):
                         },
                         "required": ["id", "tool", "args"]
                     }
-                }
+                },
+                "planning_rationale": {"type": "string"}
             },
             "required": ["goal", "steps"] #Helps llm know what keys should it have
         }
@@ -36,8 +37,19 @@ class PlannerAgent(Agent):
         return [
             {
                 "role": "system",
-                "content": ""
+                "content": """ 
+                            You are a planning agent. Your job is to break down complex user requests into a structured, step-by-step execution plan using only the provided tools. 
+                            Rules:
+                                1. Analyze the Task, Relevant memory, and Recent conversation to understand the user's goal.
+                                2. Create a logical sequence of actions.
+                                3. If information is missing, create a step using only a valid available tool or action such as ask_user, retrieve_memory, or another provided retrieval tool. Do not describe vague intentions; every step must map to an executable action.
+                                4. Each step must map to a specific tool from the Available tools list.
+                                5. Do not hallucinate tools that are not provided.
+                                6. Also return a field called planning_rationale that briefly explains why the plan was chosen. This must be a short justification summary and not a full chain-of-thought explanation.
+                                7. Return only valid JSON matching the schema.
+                          """
             },
+
             {
                 "role": "user",
                 "content": f"""
