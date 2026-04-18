@@ -26,7 +26,7 @@ class PlannerAgent(Agent):
     
     def __init__(self, llm_client:OllamaClient):
         self.llm_client = llm_client
-        super().__init__("planner")
+        super().__init__("planner") #setting the name field for when sending the message
 
     def build_messages(self,planner_input: dict) -> list[dict]:
         '''
