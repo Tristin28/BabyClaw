@@ -97,13 +97,15 @@ class PlannerAgent(Agent):
             messages = self.build_messages(planner_input)
             
             response = self.llm_client.invoke_json(messages,stream=False,schema=self.SCHEMA)
+            self.validate_llm_response(response)
+
             status = 'completed'
             target_agent = 'executor'
            
         except Exception as e:
             response = {"error": str(e)}
             status = 'failed'
-            target_agent = None
+            target_agent = 'None'
 
         return self.get_message(conversation_id=planner_input["conversation_id"], step_index=planner_input["step_index"], sender = self.name,
                                 receiver="coordinator", target_agent=target_agent, message_type="plan", status=status, response=response, visibility="internal"
