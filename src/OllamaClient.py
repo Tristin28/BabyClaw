@@ -25,8 +25,8 @@ class OllamaClient:
     
     def invoke_json(self,messages: list[dict], stream, schema: dict) -> dict:
         '''
-            Creating a new method which is the same as invoke_text but returns response in JSON structured format but still text 
-            however loads method will turn it into dict this is because planner agent can make use of it, so that no encoding of 
+            Creating a new method which is the same as invoke_text but returns response in JSON structured format defined by the respective agent but still text 
+            however loads method will turn it into a dict object so planner agent can make use of it, so that no encoding of 
             what tools need to be executed by the executor is needed
         '''
 

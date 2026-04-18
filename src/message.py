@@ -20,9 +20,3 @@ class Message:
         self.response = response
         self.visibility = visibility #Identifies whether message being sent is internally via agents or externally to the user
         self.timestamp = datetime.now(timezone.utc).isoformat()
-
-
-
-
-
-
