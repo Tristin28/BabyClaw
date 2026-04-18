@@ -1,6 +1,6 @@
-from OllamaClient import OllamaClient
-from BaseAgent import Agent
-from message import Message
+from src.OllamaClient import OllamaClient
+from src.Agents.BaseAgent import Agent
+from src.message import Message
 
 class PlannerAgent(Agent):
     #Class field
@@ -122,6 +122,6 @@ class PlannerAgent(Agent):
             status = 'failed'
             target_agent = 'None'
 
-        return self.get_message(conversation_id=planner_input["conversation_id"], step_index=planner_input["step_index"], sender = self.name,
+        return self.get_message(conversation_id=planner_input["conversation_id"], step_index=planner_input["step_index"],
                                 receiver="coordinator", target_agent=target_agent, message_type="plan", status=status, response=response, visibility="internal"
                                 ) 

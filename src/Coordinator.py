@@ -1,7 +1,7 @@
-from Agents.PlannerAgent import PlannerAgent
-from Agents.ExecutorAgent import ExecutorAgent
-from Agents.MemoryAgent import MemoryAgent
-from Agents.ReviewerAgent import ReviewerAgent
+from src.Agents.PlannerAgent import PlannerAgent
+from src.Agents.ExecutorAgent import ExecutorAgent
+from src.Agents.MemoryAgent import MemoryAgent
+from src.Agents.ReviewerAgent import ReviewerAgent
 
 class Coordinator():
     def __init__(self,planner:PlannerAgent, executor:ExecutorAgent, reviewer:ReviewerAgent, memory:MemoryAgent):

@@ -1,5 +1,5 @@
 from abc import ABC
-from message import Message
+from src.message import Message
 
 class Agent(ABC):
     def __init__(self,name):
