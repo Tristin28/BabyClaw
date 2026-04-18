@@ -121,7 +121,7 @@ class PlannerAgent(Agent):
             if not isinstance(response[field], expected_type):
                 raise ValueError(f"Plan response field '{field}' must be {expected_type.__name__}")
 
-        required_step_fields = {"id": int, "tool": str, "args": dict,}
+        required_step_fields = {"id": int, "tool": str, "args": dict, "depends_on": list}
         for step in response["steps"]:
             if not isinstance(step, dict):
                 raise ValueError("Each step must be a dictionary")
