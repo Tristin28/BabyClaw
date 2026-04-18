@@ -1,6 +1,8 @@
 '''
     DTO are used because this just a transfer of values (fields) however since these fields are not related to the agents' state
-    they are not set as fields but as an external object which will only be used through behaviour to instantiate it and then could send it 
+    they are not set as fields but as an external object which will only be used through behaviour from the agents to instantiate it and then could send it
+    to the coordinator in order to handle the respective fields that it needs to use to send it to the respective agent, and also send the entire object to the
+    relational db so that it logs every step
 '''
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -30,6 +32,6 @@ class Message:
             f"step_index={self.step_index}, sender={self.sender}, "
             f"receiver={self.receiver}, target_agent={self.target_agent}, "
             f"message_type={self.message_type}, status={self.status}, "
-            f"payload={self.response}, visibility={self.visibility}, "
+            f"response={self.response}, visibility={self.visibility}, "
             f"timestamp={self.timestamp})"
         )

@@ -10,9 +10,24 @@ def main():
         "task": "Summarise the document.txt file",
         "context": "User often wants concise summaries.",
         "recent_messages": [
-            {"sender": "user", "content": "Please summarise my file."}
+            {"sender": "user", "content": "I have to study about the concepts within this file."}
         ],
-        "tools": ["read_file", "summarise_text"],
+        "tools": [
+            {
+                "name": "read_file",
+                "description": "Reads the contents of a text file",
+                "args_schema": {
+                    "file_id": "string"
+                }
+            },
+            {
+                "name": "summarise_txt",
+                "description": "Summarises text content from a previous step",
+                "args_schema": {
+                    "source_step": "integer"
+                }
+            }
+        ],
         "conversation_id": 1,
         "step_index": 1,
     }

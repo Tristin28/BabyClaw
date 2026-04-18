@@ -15,14 +15,20 @@ class PlannerAgent(Agent):
                         "properties": {
                             "id": {"type": "integer"},
                             "tool": {"type": "string"},
-                            "args": {"type": "object"}
+                            "args": {"type": "object"},
+                            "depends_on": {
+                                "type": "array",
+                                "items": {
+                                    "type": "integer"
+                                }
+                            }
                         },
-                        "required": ["id", "tool", "args"]
+                        "required": ["id", "tool", "args","depends_on"]
                     }
                 },
                 "planning_rationale": {"type": "string"}
             },
-            "required": ["goal", "steps"] #Helps llm know what keys should it have
+            "required": ["goal", "steps", "planning_rationale"] #Helps llm know what keys should it have
         }
     
     def __init__(self, llm_client:OllamaClient):
@@ -42,11 +48,13 @@ class PlannerAgent(Agent):
                             Rules:
                                 1. Analyze the Task, Relevant memory, and Recent conversation to understand the user's goal.
                                 2. Create a logical sequence of actions.
-                                3. If information is missing, create a step using only a valid available tool or action such as ask_user, retrieve_memory, or another provided retrieval tool. Do not describe vague intentions; every step must map to an executable action.
+                                3. If information is missing, create a step using only a valid available tool. Do not describe vague intentions; every step must map to an executable action.
                                 4. Each step must map to a specific tool from the Available tools list.
-                                5. Do not hallucinate tools that are not provided.
-                                6. Also return a field called planning_rationale that briefly explains why the plan was chosen. This must be a short justification summary and not a full chain-of-thought explanation.
-                                7. Return only valid JSON matching the schema.
+                                5. Each tool in Available tools includes its expected arguments. For every step, choose a valid tool and fill args using that tool's args_schema. If a tool uses the output of a previous step, reference that step in args and in depends_on.
+                                6. Do not hallucinate tools that are not provided.
+                                7. Also return a field called planning_rationale that briefly explains why the plan was chosen. This must be a short justification summary and not a full chain-of-thought explanation.
+                                8. Each step must include a field called depends_on. This field must be a list of earlier step IDs that must be completed before the current step can run. If a step needs the output, data, or completion of a previous step, include that previous step’s ID in depends_on. Use an empty list only when the step is completely independent. Only reference valid earlier step IDs, and never invent or guess dependency IDs.
+                                9. Return only valid JSON matching the schema.
                           """
             },
 
@@ -71,12 +79,41 @@ class PlannerAgent(Agent):
         missing_keys = [key for key in required_keys if key not in planner_input]
         if missing_keys:
             raise ValueError(f"Missing planner_input keys: {missing_keys}")
+        
+    def validate_dependencies(self, steps: list[dict]):
+        step_ids = set()
+        for step in steps:
+            if step["id"] in step_ids:
+                raise ValueError(f"Duplicate step id {step['id']}")
+            step_ids.add(step["id"])
 
-    def validate_llm_response(self, response: dict, available_tools: list[str]):
+        for step in steps:
+            current_id = step["id"]
+            depends_on = step.get("depends_on", [])
+
+            if not isinstance(depends_on, list):
+                raise ValueError(f"Step {current_id} 'depends_on' must be a list")
+
+            for dep_id in depends_on:
+                if not isinstance(dep_id, int):
+                    raise ValueError(f"Step {current_id} has non-integer dependency")
+
+                if dep_id not in step_ids:
+                    raise ValueError(f"Step {current_id} depends on unknown step {dep_id}")
+
+                if dep_id == current_id:
+                    raise ValueError(f"Step {current_id} cannot depend on itself")
+
+                if dep_id >= current_id:
+                    raise ValueError(f"Step {current_id} can only depend on earlier step IDs")
+
+    def validate_llm_response(self, response: dict, available_tools: list[dict]):
+        tool_names = [tool["name"] for tool in available_tools]
+
         if not isinstance(response, dict):
             raise ValueError("Plan response must be a dictionary")
 
-        required_top_level_fields = {"goal": str, "steps": list,}
+        required_top_level_fields = {"goal": str, "steps": list, "planning_rationale": str}
         for field, expected_type in required_top_level_fields.items():
             if field not in response:
                 raise ValueError(f"Plan response missing '{field}'")
@@ -96,8 +133,10 @@ class PlannerAgent(Agent):
                 if not isinstance(step[field], expected_type):
                     raise ValueError(f"Step field '{field}' must be {expected_type.__name__}")
             
-            if step["tool"] not in available_tools:
+            if step["tool"] not in tool_names:
                 raise ValueError(f"Unknown tool '{step['tool']}' in plan")
+            
+        self.validate_dependencies(response["steps"])
 
     def get_plan(self, planner_input:dict) -> Message:
         ''' 
@@ -120,7 +159,7 @@ class PlannerAgent(Agent):
         except Exception as e:
             response = {"error": str(e)}
             status = 'failed'
-            target_agent = 'None'
+            target_agent = None
 
         return self.get_message(conversation_id=planner_input["conversation_id"], step_index=planner_input["step_index"],
                                 receiver="coordinator", target_agent=target_agent, message_type="plan", status=status, response=response, visibility="internal"
