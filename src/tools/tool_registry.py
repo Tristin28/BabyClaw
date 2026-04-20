@@ -11,6 +11,7 @@ def make_tool_registry_entry(func: Callable[..., Any], description: str, input_m
 def build_tool_registry(llm_client: OllamaClient) -> dict[str, dict[str, Any]]:
     """
         This method creates the tool registry which is how the executor will interpret the available tools that the agent can apply
+        Note desc.. are included only for the system to re-explain what the tools are doing for when someone is reading the code. (i.e. added as like comments)
     """
     summarise_txt = create_summarise_txt_func(llm_client)
 
