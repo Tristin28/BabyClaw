@@ -1,1 +1,1 @@
-# src package initializer
+#src package initializer, Where this package is the agent's brain
