@@ -19,10 +19,13 @@ PLANNER_TOOL_DESCRIPTIONS = [
             "Do not use this if the file location is unknown; use list_dir first to locate files or inspect directories. "
             "Use this before summarise_txt when the file must be read before it can be summarised. "
             "The 'file_id' argument must be the relative path of the file inside the workspace. "
-            "This tool returns the file contents as a string."
+            "Returns: the file contents as a string."
         ),
         args_schema={
-            "file_id": "string",
+            "file_id": {
+                "type": "string",
+                "description": "Relative path of the file inside the workspace"
+            }
         },
     ),
     make_tool_description(
@@ -33,10 +36,13 @@ PLANNER_TOOL_DESCRIPTIONS = [
             "Do not use this to read file contents; use read_file for that. "
             "Use this before read_file if you first need to discover where a file is located. "
             "The 'path' argument must be a relative directory path inside the workspace, and '.' means the workspace root. "
-            "This tool returns a list of file and subdirectory names."
+            "Returns: list of file and subdirectory names."
         ),
         args_schema={
-            "path": "string",
+            "path": {
+                "type": "string",
+                "description": "Relative directory path inside workspace. Use '.' to list workspace root."
+            }
         },
     ),
     make_tool_description(
@@ -47,10 +53,13 @@ PLANNER_TOOL_DESCRIPTIONS = [
             "Do not use this directly on a file path or directory path; use read_file first to obtain the text content. "
             "Use this after read_file or after another text-producing tool. "
             "The 'source_step' argument must be the id of the earlier step that produced the text to summarise. "
-            "This tool returns a summary as a string."
+            "Returns: summary as a string."
         ),
         args_schema={
-            "source_step": "integer",
+            "source_step":{
+                "type": "string",
+                "description": "ID of a previous step that produced text to summarise"
+            }
         },
     )
 ]
