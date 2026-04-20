@@ -38,10 +38,11 @@ class PlannerAgent(Agent):
     def build_messages(self,planner_input: dict) -> list[dict]:
         '''
             This method will build the prompt into a list of messages so that it is passed onto the LLM through the messages parameter of ollama's chat method
-            which is a list of dictionaries
+            which is a list of dictionaries, where it is seperated by roles because it makes the llm understand better hence it improves planning reliability
         '''
-        return [
+        messages = [
             {
+                #This is setting the agent's personality and instructions
                 "role": "system",
                 "content": """ 
                             You are a planning agent. Your job is to break down complex user requests into a structured, step-by-step execution plan using only the provided tools. 
@@ -59,19 +60,28 @@ class PlannerAgent(Agent):
             },
 
             {
+                #Describng what messages being sent by the user are and also any context about it (or what its asking) - this depends on memory retrieval and task
+                #And also defining tools in this respective role because they are part of the current task environment
                 "role": "user",
                 "content": f"""
                             Task:
                             {planner_input["task"]}
                             Relevant memory:
                             {planner_input["context"]}
-                            Recent conversation:
-                            {planner_input["recent_messages"]}
                             Available tools:
                             {planner_input["tools"]}
                     """
             }
         ]
+
+        #Seperating the recenent messages underneath their respective role
+        history_messages = [{"role": ("user" if msg["sender"] == "user" else "assistant"), "content": msg["content"]}
+                            for msg in planner_input["k_recenet_msgs"]]
+        messages.extend(history_messages)
+
+        return messages
+
+        
     
     def validate_planner_input(self,planner_input:dict):
         required_keys = ["task","context","recent_messages","tools","conversation_id","step_index"]
