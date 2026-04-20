@@ -1,5 +1,12 @@
 from src.Agents.ExecutorAgent import ExecutorAgent
 from src.OllamaClient import OllamaClient
+import copy 
+
+#Method which will handle redundant test logic
+def run_test(name, executor, plan_response):
+    print(f"\n---- {name} ----")
+    msg = executor.run( conversation_id=1,step_index=2, plan_response=plan_response)
+    print(msg)
 
 '''
     Fake tools for now, as they are used for testing and even giving it fake files and folders
@@ -30,7 +37,7 @@ def list_dir(path: str) -> list[str]:
 
 
 def main():
-    llm = OllamaClient(model="qwen2.5:3b")  # not actually used by Executor right now
+    llm = OllamaClient(model="qwen2.5:3b")  #Not actually used by Executor right now
 
     tool_registry = {
         "read_file": {
@@ -58,7 +65,7 @@ def main():
 
     executor = ExecutorAgent(llm_client=llm, tool_registry=tool_registry)
 
-    plan_response = {
+    base_plan = {
         "goal": "Summarise document and inspect workspace",
         "steps": [
             {
@@ -88,14 +95,24 @@ def main():
         ],
         "planning_rationale": "Read first, then summarise; listing workspace can run independently."
     }
+    
+    run_test("VALID PLAN", executor, copy.deepcopy(base_plan))
 
-    print("---- RAW EXECUTION RESPONSE ----")
-    raw_response = executor.execute_plan(plan_response)
-    print(raw_response)
+    ''' Another Test but this type the plan will be invalid, so to check if Executor handles invalidity well '''
+    #Testing bad dependency
+    bad_dependency = copy.deepcopy(base_plan)
+    bad_dependency["steps"][1]["depends_on"] = [99]
+    run_test("BAD DEPENDENCY", executor, bad_dependency)
 
-    print("\n---- MESSAGE RESPONSE ----")
-    msg = executor.run(conversation_id=1, step_index=2, plan_response=plan_response)
-    print(msg)
+    #Testing missing file
+    missing_file = copy.deepcopy(base_plan)
+    missing_file["steps"][0]["args"]["file_id"] = "missing.txt"
+    run_test("MISSING FILE", executor, bad_dependency)
+
+    #Test bad source_step
+    bad_source_step = copy.deepcopy(base_plan)
+    bad_source_step["steps"][1]["args"]["source_step"] = 99
+    run_test("BAD SOURCE STEP", executor, bad_dependency)
 
 
 if __name__ == "__main__":
