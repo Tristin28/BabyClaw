@@ -84,7 +84,9 @@ class ExecutorAgent(Agent):
                     except Exception as e:
                         step_status[step["id"]] = "failed"
                         execution_trace.append({"id": step["id"], "tool": step["tool"], "status": "failed", "error": str(e)})
-                        raise #propogating the error upward into the stack frames (which needs to be handled by coord)
+                        
+                        #propogating the error upward into the stack frames which will be handled by the run method however, it has to be directed accordingly in coord
+                        raise 
 
             remaining_steps = [step for step in remaining_steps if step["id"] not in completed_ids]#Removing the steps which are completed
         
