@@ -1,7 +1,6 @@
 from src.Agents.PlannerAgent import PlannerAgent
 from src.OllamaClient import OllamaClient
 
-
 def main():
     llm = OllamaClient(model="qwen2.5:3b")
     planner = PlannerAgent(llm)

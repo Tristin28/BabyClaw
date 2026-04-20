@@ -95,7 +95,7 @@ def main():
         ],
         "planning_rationale": "Read first, then summarise; listing workspace can run independently."
     }
-    
+
     run_test("VALID PLAN", executor, copy.deepcopy(base_plan))
 
     ''' Another Test but this type the plan will be invalid, so to check if Executor handles invalidity well '''
@@ -107,12 +107,12 @@ def main():
     #Testing missing file
     missing_file = copy.deepcopy(base_plan)
     missing_file["steps"][0]["args"]["file_id"] = "missing.txt"
-    run_test("MISSING FILE", executor, bad_dependency)
+    run_test("MISSING FILE", executor, missing_file)
 
     #Test bad source_step
     bad_source_step = copy.deepcopy(base_plan)
     bad_source_step["steps"][1]["args"]["source_step"] = 99
-    run_test("BAD SOURCE STEP", executor, bad_dependency)
+    run_test("BAD SOURCE STEP", executor, bad_source_step)
 
 
 if __name__ == "__main__":
