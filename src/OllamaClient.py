@@ -19,7 +19,9 @@ class OllamaClient:
             model=self.model,
             messages=messages,
             stream=stream,
-            options = options
+            options = {
+                "temperature": 0.1 
+            }
         )
 
         return response.message.content
