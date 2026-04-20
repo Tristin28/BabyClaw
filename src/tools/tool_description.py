@@ -25,13 +25,5 @@ PLANNER_TOOL_DESCRIPTIONS = [
         args_schema={
             "source_step": "integer",
         },
-    ),
-    make_tool_description(
-        name="write_file",
-        description="Writes text content into a file inside the workspace sandbox.",
-        args_schema={
-            "filename": "string",
-            "source_step": "integer",
-        },
     )
 ]
