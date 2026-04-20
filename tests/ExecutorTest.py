@@ -42,21 +42,18 @@ def main():
     tool_registry = {
         "read_file": {
             "func": read_file,
-            "description": "Reads the contents of a text file",
             "input_map": {
                 "file_id": "file_id"
             }
         },
         "summarise_txt": {
             "func": summarise_txt,
-            "description": "Summarises text from a previous step",
             "input_map": {
                 "text": "source_step"
             }
         },
         "list_dir": {
             "func": list_dir,
-            "description": "Lists files in a directory",
             "input_map": {
                 "path": "path"
             }
