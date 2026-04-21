@@ -3,7 +3,7 @@
         i.e. it will only be able to access files if they are on the same directory. Hence this will enforce workspace sandboxing so the respective system it runs on
         is untouched.
     '''
-from utils import resolve_workspace_path
+from src.tools.utils import resolve_workspace_path
 
 def read_file(file_id: str) -> str:
     """

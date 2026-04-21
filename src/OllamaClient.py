@@ -9,7 +9,7 @@ class OllamaClient:
     def __init__(self, model: str = "qwen2.5:3b"):
         self.model = model
 
-    def invoke_text(self, messages: list[dict], stream, options: dict) -> str:
+    def invoke_text(self, messages: list[dict], stream) -> str:
         '''
             Each ask method will let the respective agent send its respective role based prompt (where it will be a list of dictionaries) to the LLM running on 
             the machine and then it receives a response back from the LLM in text and not in JSON format
@@ -26,7 +26,7 @@ class OllamaClient:
 
         return response.message.content
     
-    def invoke_json(self,messages: list[dict], stream, schema: dict, options: dict) -> dict:
+    def invoke_json(self,messages: list[dict], stream, schema: dict) -> dict:
         '''
             Creating a new method which is the same as invoke_text but returns response in JSON structured format defined by the respective agent but still text 
             however loads method will turn it into a dict object so planner agent can make use of it, so that no encoding of 
