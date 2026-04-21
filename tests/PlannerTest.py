@@ -31,7 +31,7 @@ def main():
         "step_index": 1,
     }
 
-    result = planner.get_plan(planner_input)
+    result = planner.run(planner_input)
 
     print("Planner returned:")
     print(result)

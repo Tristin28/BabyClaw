@@ -148,7 +148,7 @@ class PlannerAgent(Agent):
             
         self.validate_dependencies(response["steps"])
 
-    def get_plan(self, planner_input:dict) -> Message:
+    def run(self, planner_input:dict) -> Message:
         ''' 
             planner_input would be a dictionary which will contain the task, context, recent_msgs and tools available so that all these info 
             Which are given by the coordinator will be assembled into one prompt for the LLM to reason about.
