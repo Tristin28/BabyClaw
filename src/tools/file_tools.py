@@ -5,17 +5,17 @@
     '''
 from src.tools.utils import resolve_workspace_path
 
-def read_file(file_id: str) -> str:
+def read_file(path: str) -> str:
     """
         Reads a text file safely from inside the workspace sandbox.
     """
-    file_path = resolve_workspace_path(file_id)
+    file_path = resolve_workspace_path(path)
 
     if not file_path.exists():
-        raise FileNotFoundError(f"File '{file_id}' not found")
+        raise FileNotFoundError(f"File '{path}' not found")
 
     if not file_path.is_file():
-        raise ValueError(f"'{file_id}' is not a file")
+        raise ValueError(f"'{path}' is not a file")
 
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()

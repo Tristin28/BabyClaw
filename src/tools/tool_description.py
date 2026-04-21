@@ -1,4 +1,4 @@
-def make_tool_description(name: str, description: str, args_schema: dict[str, str]) -> dict:
+def make_tool_description(name: str, description: str, args_schema: dict[str, dict[str,str]]) -> dict:
     """
         Creates a planner-facing tool description, so that the llm understands what tools exist and what arguments they require.
     """
@@ -18,11 +18,11 @@ PLANNER_TOOL_DESCRIPTIONS = [
             "Use this when the user asks about a specific file or when another step needs the file's text as input. "
             "Do not use this if the file location is unknown; use list_dir first to locate files or inspect directories. "
             "Use this before summarise_txt when the file must be read before it can be summarised. "
-            "The 'file_id' argument must be the relative path of the file inside the workspace. "
+            "The 'path' argument must be the relative path of the file inside the workspace. "
             "Returns: the file contents as a string."
         ),
         args_schema={
-            "file_id": {
+            "path": {
                 "type": "string",
                 "description": "Relative path of the file inside the workspace"
             }
@@ -36,7 +36,8 @@ PLANNER_TOOL_DESCRIPTIONS = [
             "Do not use this to read file contents; use read_file for that. "
             "Use this before read_file if you first need to discover where a file is located. "
             "The 'path' argument must be a relative directory path inside the workspace, and '.' means the workspace root. "
-            "Returns: list of file and subdirectory names."
+            "Returns: JSON array of name strings, e.g. [\"main.py\", \"data/\", \"README.md\"]. "
+            "Directories are suffixed with '/'. Use these names to construct paths for read_file."
         ),
         args_schema={
             "path": {
@@ -57,7 +58,7 @@ PLANNER_TOOL_DESCRIPTIONS = [
         ),
         args_schema={
             "source_step":{
-                "type": "string",
+                "type": "integer",
                 "description": "ID of a previous step that produced text to summarise"
             }
         },

@@ -20,7 +20,7 @@ def build_tool_registry(llm_client: OllamaClient) -> dict[str, dict[str, Any]]:
             func=read_file,
             description="Reads the contents of a text file from inside the workspace sandbox.",
             input_map={
-                "file_id": "file_id",
+                "path": "path",
             },
         ),
         "list_dir": make_tool_registry_entry(

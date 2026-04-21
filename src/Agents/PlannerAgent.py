@@ -76,13 +76,14 @@ class PlannerAgent(Agent):
             },
 
             {
-                #Describng what messages being sent by the user are and also any context about it (or what its asking) - this depends on memory retrieval and task
+                #Describng what messages being sent by the user are and also any context 
+                #(Relevanat memory) about it or what the user is asking  - this depends on memory retrieval and task
                 #And also defining tools in this respective role because they are part of the current task environment
                 "role": "user",
                 "content": f"""
                             Task:
                             {planner_input["task"]}
-                            Relevant memory:
+                            Relevant memory: 
                             {planner_input["context"]}
                             Available tools:
                             {planner_input["tools"]}

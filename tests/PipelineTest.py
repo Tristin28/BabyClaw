@@ -2,7 +2,6 @@ from src.Agents.PlannerAgent import PlannerAgent
 from src.Agents.ExecutorAgent import ExecutorAgent
 from src.Coordinator import Coordinator
 from src.OllamaClient import OllamaClient
-from src.message import Message
 
 from src.tools.tool_description import PLANNER_TOOL_DESCRIPTIONS
 from src.tools.tool_registry import build_tool_registry
