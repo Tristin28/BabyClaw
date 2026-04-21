@@ -81,8 +81,6 @@ class PlannerAgent(Agent):
 
         return messages
 
-        
-    
     def validate_planner_input(self,planner_input:dict):
         required_keys = ["task","context","recent_messages","tools","conversation_id","step_index"]
 
