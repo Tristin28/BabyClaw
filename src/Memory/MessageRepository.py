@@ -3,7 +3,8 @@ import json
 from src.message import Message
 
 '''
-    This class is going to handle what queries to tell the dbms to execute, while then the memory agent's job will just be when to store and what to retrieve
+    This class is going to handle what queries to tell the dbms to execute , while then the memory agent's job will just be when to store and what to retrieve
+    That is this repository decides how to store/retrieve the Message object and memory agent will tell it when to do it
 '''
 class MessageRepository():
     def __init__(self,db_manager: DatabaseManager):
@@ -35,7 +36,7 @@ class MessageRepository():
                     message.target_agent,
                     message.message_type,
                     message.status,
-                    json.dumps(message.response),
+                    json.dumps(message.response), #converting into text because of how SQLite stores data (i.e. doesnt store python obj)
                     message.visibility,
                     message.timestamp,
                 )
@@ -58,7 +59,7 @@ class MessageRepository():
         rows = list(reversed(rows))
 
         return [{"sender": row["sender"], 
-                 "content": json.loads(row["response"]) #converting back into a python object (i.e. dict in this case)
+                 "content": row["response"] #Leaving it as text because this will be passed inside the prompt planner
                  }
                 for row in rows
                 ]

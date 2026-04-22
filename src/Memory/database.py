@@ -8,8 +8,13 @@ class DatabaseManager():
         self.db_path = db_path
     
     def get_connection(self) -> sqlite3.Connection: 
+        '''
+            Creates the database file or loads up into memory, and retrieves a connection with the dbms (i.e. object will be communicating with dbms)
+            Where this method will be called each time the usage of the db is needed (called every time instead of having it open until program's life time because if it were like that
+            it would waste resource space, and slows down the program which is pointless since db queries are not done often)
+        '''
         conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn.row_factory = sqlite3.Row #Letting the connection object to access the columns with their respective names and not have to remember their index
         return conn
     
     def init_db(self):
