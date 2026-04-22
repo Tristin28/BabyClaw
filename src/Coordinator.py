@@ -22,18 +22,26 @@ class Coordinator():
             Main method which will be called by the client code, as it is going to handle the entire system, i.e. core workflow logic
             Note conv_id will be retrieved by the main entry point where the text sent by user is being handled
         '''
-        planner_input = self.build_planner_input(user_task = user_task, context = "", k_recent_messages = [], conversation_id = conversation_id, step_index = 1)
+        k_recent_messages = self.memory.get_recent_messages(conversation_id=conversation_id, k=5)
+        #Temporary - just to check if it works
+        print("\n---- K RECENT MESSAGES ----")
+        print(k_recent_messages)
+        planner_input = self.build_planner_input(user_task = user_task, context = "", k_recent_messages = k_recent_messages, conversation_id = conversation_id, step_index = 1)
 
         planner_msg = self.planner.run(planner_input=planner_input)
+        self.memory.store_message(message=planner_msg)
+
         if planner_msg.status == 'failed' and planner_msg.target_agent is None:
             return planner_msg
         plan_response = planner_msg.response
 
         executor_msg = self.executor.run(conversation_id=conversation_id, step_index=2,plan_response=plan_response)
+        self.memory.store_message(message=executor_msg)
+
         if executor_msg.status == 'failed' and executor_msg.target_agent is None:
-            print("Failed")
-        return executor_msg
+            return executor_msg
         
+        return executor_msg
         #calling reviewer + its logic which should return if it accepts/rejects, then coord decides what to do w.r.t what it recieves
 
     def build_planner_input(self, user_task: str, context: str, k_recent_messages: list[dict], conversation_id: int, step_index: int ) -> dict:
