@@ -1,6 +1,6 @@
 from pathlib import Path
 from src.Memory.database import DatabaseManager
-from src.Memory.MessageRepository import MessageRepository
+from src.Agents.MemoryAgent import MemoryAgent
 from src.message import Message
 
 
@@ -10,7 +10,7 @@ def main():
     db_manager = DatabaseManager(str(db_path))
     db_manager.init_db()
 
-    repo = MessageRepository(db_manager)
+    agent = MemoryAgent(db_manager)
 
     msg1 = Message(
         conversation_id=1,
@@ -61,11 +61,11 @@ def main():
         visibility="internal",
     )
 
-    repo.store_message(msg1)
-    repo.store_message(msg2)
-    repo.store_message(msg3)
+    agent.store_message(msg1)
+    agent.store_message(msg2)
+    agent.store_message(msg3)
 
-    recent = repo.get_recent_messages(conversation_id=1, k=2)
+    recent = agent.get_recent_messages(conversation_id=1, k=2)
 
     print("\n---- LAST 2 MESSAGES ----")
     for msg in recent:
@@ -73,13 +73,13 @@ def main():
 
 
     print("\n---- GETTING ALL MESSAGES ----")
-    recent = repo.get_recent_messages(conversation_id=1, k=5)
+    recent = agent.get_recent_messages(conversation_id=1, k=5)
     for msg in recent:
         print(msg)
 
 
     print("\n TESTING OUT INVALID ID")
-    recent = repo.get_recent_messages(conversation_id=999, k=5)
+    recent = agent.get_recent_messages(conversation_id=999, k=5)
     for msg in recent:
         print(msg)
 
