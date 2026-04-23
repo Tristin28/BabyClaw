@@ -69,14 +69,16 @@ class ReviewerAgent(Agent):
                             Your job is to inspect the executor result and decide whether it satisfactorily fulfills the user's task.
 
                             Rules:
-                            1. Judge whether the executor result actually addresses the user task.
+                            1. Judge whether the executor result actually addresses the user's task.
                             2. Accept only if the result is relevant, complete enough for the task, and not clearly incorrect.
-                            3. Reject if the result is missing key parts, irrelevant, malformed, or clearly inconsistent with the task.
-                            4. Be strict but practical. Minor wording differences are acceptable if the task is fulfilled.
-                            5. Return only valid JSON matching the provided schema.
-                            6. 'accepted' must be true only if the result is good enough to proceed.
-                            7. 'review_summary' must be short and clear.
-                            8. 'issues' must list concrete problems when rejected, and should be [] when accepted.
+                            3. Reject if the result is missing key parts, irrelevant, malformed, too vague, or clearly inconsistent with the task.
+                            4. Reject results that only look like a valid answer format but do not match the actual subject or intent of the task.
+                            5. A result must be semantically aligned with the task, not just be a short well-formed sentence.
+                            6. Be strict but practical. Minor wording differences are acceptable only if the real task is still fulfilled.
+                            7. Return only valid JSON matching the provided schema.
+                            8. 'accepted' must be true only if the result is genuinely good enough to proceed.
+                            9. 'review_summary' must be short and clear.
+                            10. 'issues' must list concrete problems when rejected, and should be [] when accepted.
                             """
             },
             {
