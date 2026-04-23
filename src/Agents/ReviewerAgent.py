@@ -85,7 +85,7 @@ class ReviewerAgent(Agent):
                             User task:
                             {user_task}
 
-                            Executor trace:
+                            Execution results:
                             {execution_trace}
                             """
             }
