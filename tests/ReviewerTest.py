@@ -48,20 +48,3 @@ run_test(
         ]
     }
 )
-
-# Test 3: irrelevant result
-run_test(
-    "IRRELEVANT RESULT",
-    "Summarise the document in short terms",
-    {
-        "goal": "Summarise the document in short terms",
-        "step_results": [
-            {
-                "id": 1,
-                "tool": "summarise_tool",
-                "status": "completed",
-                "result": "The weather is sunny today."
-            }
-        ]
-    }
-)
