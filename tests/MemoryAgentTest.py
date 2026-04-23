@@ -1,5 +1,5 @@
 from pathlib import Path
-from src.Memory.database import DatabaseManager
+from src.Memory.sql_database import DatabaseManager
 from src.Agents.MemoryAgent import MemoryAgent
 from src.message import Message
 

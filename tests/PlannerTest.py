@@ -8,7 +8,7 @@ def main():
     planner_input = {
         "task": "Summarise the document.txt file",
         "context": "User often wants concise summaries.",
-        "recent_messages": [
+        "k_recent_messages": [
             {"sender": "user", "content": "I have to study about the concepts within this file."}
         ],
         "tools": [

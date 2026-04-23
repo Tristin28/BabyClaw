@@ -1,4 +1,4 @@
-from src.Memory.database import DatabaseManager
+from src.Memory.sql_database import DatabaseManager
 import json 
 from src.message import Message
 
