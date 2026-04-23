@@ -258,7 +258,7 @@ class MemoryAgent(Agent):
             else:
                 response={"stored": False}
                 status = "completed"
-                
+
         except Exception as e:
             status="failed"
             response={
