@@ -94,7 +94,8 @@ class PlannerAgent(Agent):
 
         #Seperating the recenent messages underneath their respective role
         history_messages = [{"role": ("user" if msg["sender"] == "user" else "assistant"), "content": msg["content"]}
-                            for msg in planner_input["k_recent_messages"]]
+                            for msg in planner_input["k_recent_messages"] 
+                            if msg["sender"]=="user" or msg["sender"]=="coordinator" and msg["visibility"]=="external"]
         messages.extend(history_messages)
 
         return messages
@@ -190,3 +191,5 @@ class PlannerAgent(Agent):
         return self.get_message(conversation_id=planner_input["conversation_id"], step_index=planner_input["step_index"],
                                 receiver="coordinator", target_agent=target_agent, message_type="plan", status=status, response=response, visibility="internal"
                                 ) 
+    
+    
