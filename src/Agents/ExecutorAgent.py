@@ -5,34 +5,53 @@ from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class ExecutorAgent(Agent):
-    def __init__(self, llm_client:OllamaClient, tool_registry: dict):
-        self.llm_client = llm_client
+    def __init__(self, tool_registry: dict):
         super().__init__("executor")
         self.tool_registry = tool_registry #setting as an instance field so that sets of tools can be exchanged depending on what user enables, i.e. coord sets it
 
-    def run(self, conversation_id: int, step_index: int, plan_response: dict) -> Message:
-        try:
-            execution_response = self.execute_plan(plan_response)
-            status = "completed"
-        except Exception as e:
-            execution_response = {"error": str(e)}
-            status = "failed"
-
-        return self.get_results(conversation_id=conversation_id, step_index=step_index, execution_response=execution_response, status=status)
-
-    def get_results(self, conversation_id: int, step_index: int, execution_response: dict, status: str) -> Message:
+    def initialise_execution_state(self, plan_response: dict) -> dict:
+        ''' 
+            Initialisting an execution state so that the coordinator would be the one which keeps track of the steps running,
+            this is done so that it interleaves with the executor and if any runnable steps are to have permission it asks the user before it executes the
+            respective tools.
         '''
-            Wrapper method which is wrapping the execution response into a Message DTO so it can be sent to the coordinator.
-        '''
-        
-        target_agent = None
-        if status == "completed":
-            target_agent = "reviewer"
+        return {
+            "goal": plan_response["goal"],
+            "remaining_steps": plan_response["steps"][:], #Copying the list so that we dont remove elements from the actual step list too (since mutable)
+            "step_results": {},
+            "step_status": {},
+            "execution_trace": []
+        }
+    
+    def is_execution_complete(self, execution_state: dict) -> bool:
+        return len(execution_state["remaining_steps"]) == 0
+    
+    def get_runnable_wave(self, execution_state: dict) -> list[dict]:
+        remaining_steps = execution_state["remaining_steps"]
+        step_status = execution_state["step_status"]
+        return self.get_runnable_steps(remaining_steps, step_status)
+    
+    def get_runnable_steps(self, remaining_steps, step_status) -> list[dict]:
+        runnable = []
 
-        return self.get_message(conversation_id=conversation_id, step_index=step_index, receiver="coordinator", target_agent=target_agent,message_type="execution_result",
-                                status=status, response=execution_response, visibility="internal"
-                                )
+        for step in remaining_steps:
+            if self.dependencies_satisfied(step, step_status):
+                runnable.append(step)
 
+        return runnable
+
+    def dependencies_satisfied(self, step: dict, step_status: dict) -> bool:
+        for dep_id in step.get("depends_on",[]):
+            if step_status.get(dep_id) != "completed":
+                return False
+        return True
+    
+    def build_execution_result(self, execution_state: dict) -> dict:
+        return {
+            "goal": execution_state["goal"],
+            "step_results": execution_state["execution_trace"]
+        }
+    
     def validate_result(self, tool_name: str, result: Any):
         '''
             Validates whether the result (being a built in python object) returned by a tool is usable 
@@ -47,51 +66,48 @@ class ExecutorAgent(Agent):
         if isinstance(result, (list, dict, tuple, set)) and len(result) == 0:
             raise ValueError(f"Tool '{tool_name}' returned an empty {type(result).__name__}")
 
-    def execute_plan(self, plan_response: dict) -> dict:
-        step_results = {} #stores the results of each step_id i.e. step_id: result
-        step_status = {} #stores the step_id as a key and each value is either 'completed' or 'failed'
-        remaining_steps = plan_response["steps"][:] #Copying the list so that we dont remove elements from the actual step list too (since mutable)
+    def execute_tools(self, execution_state: dict, runnable_steps: list[dict]) -> dict:
+        #Making use of mutability, as dict object is mutable then if some changes happen by any reference all other pointers pointing to respective obj will see the change
+        step_results = execution_state["step_results"] #stores the results of each step_id i.e. step_id: result
+        step_status = execution_state["step_status"] #stores the step_id as a key and each value is either 'completed' or 'failed'
 
-        execution_trace = []
+        execution_trace = execution_state["execution_trace"]
 
-        while remaining_steps:
-            runnable_steps = self.get_runnable_steps(remaining_steps, step_status)
-            if not runnable_steps: 
-                raise RuntimeError("Execution blocked: no runnable steps found")
-            
-            #Deciding how many threads should be created inside of the thread pool so there is no wastage of resources
-            MAX_THREADS = 8
-            max_workers = max(1, min(len(runnable_steps), MAX_THREADS)) 
+       
+        #Deciding how many threads should be created inside of the thread pool so there is no wastage of resources
+        MAX_THREADS = 8
+        max_workers = max(1, min(len(runnable_steps), MAX_THREADS)) 
 
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                #Dict where key = result (of type future) and value would be current step being executed (i.e. value = dict)
-                future_step_result = {executor.submit(self.execute_step,step, step_results): step for  step in runnable_steps}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            #Dict where key = result (of type future) and value would be current step being executed (i.e. value = dict)
+            future_step_result = {executor.submit(self.execute_step,step, step_results): step for  step in runnable_steps}
 
-                completed_ids = []
+            completed_ids = []
 
-                for future in as_completed(future_step_result):
-                    step = future_step_result[future]
+            for future in as_completed(future_step_result):
+                step = future_step_result[future]
 
-                    try:
-                        result = future.result()
+                try:
+                    result = future.result()
+                    self.validate_result(step["tool"], result)
 
-                        step_results[step["id"]] = result
-                        step_status[step["id"]] = "completed"
-                        completed_ids.append(step["id"])
+                    step_results[step["id"]] = result
+                    step_status[step["id"]] = "completed"
+                    completed_ids.append(step["id"])
 
-                        execution_trace.append({"id": step["id"], "tool": step["tool"], "status": "completed", "result": result})
+                    execution_trace.append({"id": step["id"], "tool": step["tool"], "status": "completed", "result": result})
 
-                    except Exception as e:
-                        step_status[step["id"]] = "failed"
-                        execution_trace.append({"id": step["id"], "tool": step["tool"], "status": "failed", "error": str(e)})
-                        
-                        #propogating the error upward into the stack frames which will be handled by the run method however, it has to be directed accordingly in coord
-                        raise 
+                except Exception as e:
+                    step_status[step["id"]] = "failed"
+                    execution_trace.append({"id": step["id"], "tool": step["tool"], "status": "failed", "error": str(e)})
+                    
+                    #propogating the error upward into the stack frames which will be handled by the run method however, it has to be directed accordingly in coord
+                    raise RuntimeError(f"Step {step['id']} failed: {e}") from e
 
-            remaining_steps = [step for step in remaining_steps if step["id"] not in completed_ids]#Removing the steps which are completed
-        
-        return {"goal": plan_response["goal"], "step_results": execution_trace}
-
+            #Removing the steps which are completed
+            execution_state["remaining_steps"] = [step for step in execution_state["remaining_steps"] if step["id"] not in completed_ids] 
+         
+        return execution_state
 
     def execute_step(self, plan_output_step: dict, step_results: dict) -> Any:
         tool_name = plan_output_step["tool"]
@@ -107,21 +123,6 @@ class ExecutorAgent(Agent):
 
         result = tool_fn(**resolved_args)
         return result
-    
-    def get_runnable_steps(self, remaining_steps, step_status) -> list[dict]:
-        runnable = []
-
-        for step in remaining_steps:
-            if self.dependencies_satisified(step, step_status):
-                runnable.append(step)
-
-        return runnable
-
-    def dependencies_satisified(self, step: dict, step_status: dict) -> bool:
-        for dep_id in step["depends_on"]:
-            if step_status.get(dep_id) != "completed":
-                return False
-        return True
     
     def resolve_args(self, step_results: dict, input_map: dict, args: dict) -> dict:
         '''
@@ -149,3 +150,33 @@ class ExecutorAgent(Agent):
                 resolved_args[real_arg] = value
         
         return resolved_args
+
+    def run_set_tools(self, conversation_id: int, step_index: int, execution_state: dict, runnable_steps: list[dict]) -> Message:
+        '''
+            Wrapper function for execute_tools so that it calls it and then the respective execution state it returns is then checked whether 
+            it is entirely complete, not yet complete or something failed
+        '''
+        try:
+            updated_execution_state = self.execute_tools(execution_state=execution_state, runnable_steps=runnable_steps)
+            if self.is_execution_complete(updated_execution_state):
+                execution_response = self.build_execution_result(updated_execution_state)
+                target_agent = "reviewer"
+                message_type = "execution_result" 
+            else:
+                target_agent = None
+                message_type = "execution_wave_result" 
+                execution_response = updated_execution_state
+
+            status = "completed"
+        except Exception as e:
+            status = "failed"
+            target_agent = None
+            message_type = "execution_result"
+            execution_response = {
+                "error": str(e),
+                "execution_state": execution_state
+             }
+
+        return self.get_message(conversation_id=conversation_id, step_index=step_index, receiver="coordinator", target_agent=target_agent,message_type=message_type,
+                            status=status, response=execution_response, visibility="internal"
+                            )

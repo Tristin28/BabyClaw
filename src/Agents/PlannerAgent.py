@@ -55,10 +55,11 @@ class PlannerAgent(Agent):
                             5. Each tool in Available tools includes its expected arguments. Fill args exactly using that tool's args_schema.
                             6. If an argument such as source_step refers to previous tool output, its value must be the integer id of an earlier step, not raw text and not a file name.
                             7. If a step uses the output of an earlier step, include that earlier step id in both args and depends_on.
-                            8. Do not hallucinate tools that are not provided.
-                            9. Also return a field called planning_rationale that briefly explains why the plan was chosen. This must be a short justification summary and not a full chain-of-thought explanation.
-                            10. Each step must include a field called depends_on. This field must be a list of earlier step IDs that must be completed before the current step can run.
-                            11. Return only valid JSON matching the schema.
+                            8. Do not hallucinate tools that are not provided. Never invent a new tool.
+                            9. If no available tool can solve the task, return a failure response explaining that no suitable tool exists.
+                            10. Also return a field called planning_rationale that briefly explains why the plan was chosen. This must be a short justification summary and not a full chain-of-thought explanation.
+                            11. Each step must include a field called depends_on. This field must be a list of earlier step IDs that must be completed before the current step can run.
+                            12. Return only valid JSON matching the schema.
 
                             Example:
                             If step 1 reads a file and step 2 summarises that file's text, then step 2 must look like:
