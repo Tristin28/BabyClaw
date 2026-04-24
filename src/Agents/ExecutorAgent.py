@@ -29,7 +29,7 @@ class ExecutorAgent(Agent):
     def get_runnable_wave(self, execution_state: dict) -> list[dict]:
         remaining_steps = execution_state["remaining_steps"]
         step_status = execution_state["step_status"]
-        return self.get_runnable_steps(remaining_steps, step_status)
+        return self.get_runnable_steps(remaining_steps, step_status) #will retutrn the respective sublist containing only dict items of which steps are valid to be executed
     
     def get_runnable_steps(self, remaining_steps, step_status) -> list[dict]:
         runnable = []
@@ -38,7 +38,7 @@ class ExecutorAgent(Agent):
             if self.dependencies_satisfied(step, step_status):
                 runnable.append(step)
 
-        return runnable
+        return runnable #would represent a sublist of the actual list i.e. current step items to be executed
 
     def dependencies_satisfied(self, step: dict, step_status: dict) -> bool:
         for dep_id in step.get("depends_on",[]):
@@ -161,7 +161,7 @@ class ExecutorAgent(Agent):
             if self.is_execution_complete(updated_execution_state):
                 execution_response = self.build_execution_result(updated_execution_state)
                 target_agent = "reviewer"
-                message_type = "execution_result" 
+                message_type = "last batch of steps are completed" 
             else:
                 target_agent = None
                 message_type = "execution_wave_result" 
@@ -171,7 +171,7 @@ class ExecutorAgent(Agent):
         except Exception as e:
             status = "failed"
             target_agent = None
-            message_type = "execution_result"
+            message_type = "execution_failed"
             execution_response = {
                 "error": str(e),
                 "execution_state": execution_state
