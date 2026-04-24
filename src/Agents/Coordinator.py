@@ -4,6 +4,8 @@ from src.Agents.MemoryAgent import MemoryAgent
 from src.Agents.ReviewerAgent import ReviewerAgent
 from src.message import Message
 from src.OllamaClient import OllamaClient
+from src.tools.file_tools import list_dir
+
 
 '''
     This is the agent which manages workflow, and configures the respective agents i.e. it acts like the runner method
@@ -29,8 +31,9 @@ class Coordinator():
         '''
             Building the respective planner input for the planner agent to handle it and process it, so that the llm would know how to reason
         '''
+        workspace_contents = list_dir() #giving the planner llm access to what contents the directory it operates over contains
         return {"task": user_task, "context": context, "k_recent_messages": k_recent_messages, "tools": self.planner_tool_descriptions, 
-                "conversation_id": conversation_id, "step_index": step_index}
+                "conversation_id": conversation_id, "step_index": step_index, "workspace_contents": workspace_contents}
 
     def try_plan(self,planner_input: dict, max_attempts: int = 2) -> Message:
             '''
