@@ -1,9 +1,4 @@
 from pathlib import Path
-'''
-    Fixing the path to the workspace folder which is alongside the agent's logic.
-    Further improvement is to have this path be configured by the user rather than being a fixed global var (i.e. through coord) 
-    in order for the agent system to access any folder (sandbox) the user wants it to access
-'''
 
 class WorkspaceConfig:
     def __init__(self, root: str):
