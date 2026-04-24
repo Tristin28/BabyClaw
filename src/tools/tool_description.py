@@ -28,6 +28,7 @@ PLANNER_TOOL_DESCRIPTIONS = [
             }
         },
     ),
+
     make_tool_description(
         name="list_dir",
         description=(
@@ -46,6 +47,7 @@ PLANNER_TOOL_DESCRIPTIONS = [
             }
         },
     ),
+
     make_tool_description(
         name="summarise_txt",
         description=(
@@ -60,6 +62,76 @@ PLANNER_TOOL_DESCRIPTIONS = [
             "source_step":{
                 "type": "integer",
                 "description": "ID of a previous step that produced text to summarise"
+            }
+        },
+    ),
+
+    make_tool_description(
+        name="create_file",
+        description=(
+            "Create a new file inside the workspace sandbox. "
+            "Use this when the user asks to create a new file, optionally with initial content. "
+            "Do not use this to overwrite an existing file; use write_file for that. "
+            "This tool requires user permission because it modifies the workspace. "
+            "The 'path' argument must be the relative file path inside the workspace. "
+            "The 'content' argument is the initial text to place inside the file. "
+            "Returns: confirmation message as a string."
+        ),
+        args_schema={
+            "path": {
+                "type": "string",
+                "description": "Relative path of the new file inside the workspace"
+            },
+            "content": {
+                "type": "string",
+                "description": "Initial text content to write into the new file"
+            }
+        },
+    ),
+    
+    make_tool_description(
+        name="write_file",
+        description=(
+            "Write text content to a file inside the workspace sandbox. "
+            "Use this when the user asks to save, write, or overwrite content in a file. "
+            "This may overwrite existing file content, so it requires user permission. "
+            "Do not use this when the user only asks to display the result in the terminal. "
+            "Use this after a text-producing step such as summarise_txt if the user asks to save the output. "
+            "The 'path' argument must be the relative file path inside the workspace. "
+            "The 'content' argument is the text to write. "
+            "Returns: confirmation message as a string."
+        ),
+        args_schema={
+            "path": {
+                "type": "string",
+                "description": "Relative path of the file inside the workspace"
+            },
+            "content": {
+                "type": "string",
+                "description": "Text content to write into the file"
+            }
+        },
+    ),
+
+    make_tool_description(
+        name="append_file",
+        description=(
+            "Append text content to the end of a file inside the workspace sandbox. "
+            "Use this when the user asks to add content to an existing file without replacing its current contents. "
+            "This modifies the workspace, so it requires user permission. "
+            "Do not use this when the user wants to overwrite the whole file; use write_file instead. "
+            "The 'path' argument must be the relative file path inside the workspace. "
+            "The 'content' argument is the text to append. "
+            "Returns: confirmation message as a string."
+        ),
+        args_schema={
+            "path": {
+                "type": "string",
+                "description": "Relative path of the file inside the workspace"
+            },
+            "content": {
+                "type": "string",
+                "description": "Text content to append to the file"
             }
         },
     )
