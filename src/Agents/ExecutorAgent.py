@@ -1,5 +1,4 @@
 from src.Agents.BaseAgent import Agent
-from src.OllamaClient import OllamaClient
 from src.message import Message 
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -161,7 +160,7 @@ class ExecutorAgent(Agent):
             if self.is_execution_complete(updated_execution_state):
                 execution_response = self.build_execution_result(updated_execution_state)
                 target_agent = "reviewer"
-                message_type = "last batch of steps are completed" 
+                message_type = "execution_result" 
             else:
                 target_agent = None
                 message_type = "execution_wave_result" 
