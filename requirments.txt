@@ -1,4 +1,0 @@
-ollama
-wikipedia 
-langchain-community 
-duckduckgo-search
