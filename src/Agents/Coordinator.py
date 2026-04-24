@@ -94,15 +94,23 @@ class Coordinator():
         Messages sent to the runner file in order for the response field to be sent to the user in order for it to know what happened with its task
     '''
     def build_success_message(self, conversation_id: int, step_index: int, review_summary: str, execution_response: dict) -> Message:
-        return Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, 
+        message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, 
                            message_type="workflow_result", status="completed",
                            response={"message": "Task completed successfully.", "review_summary": review_summary, "execution_trace": execution_response.get("step_results", [])}, 
                            visibility="external")
+        
+        self.memory.store_message(message)
+
+        return message
 
     def build_failure_message(self, conversation_id: int, step_index: int, review_summary: str, issues: list[str]) -> Message:
-        return Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, message_type="workflow_result",
+        message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, message_type="workflow_result",
                            status="failed", response={"message": "Task could not be completed successfully.", "review_summary": review_summary, "issues": issues}
                            ,visibility="external")
+        
+        self.memory.store_message(message)
+
+        return message
     
 
     def start_workflow(self, conversation_id: int, user_task: str):
@@ -191,9 +199,13 @@ class Coordinator():
 
             if not runnable_steps:
                 #since while loop is confirming that the execution is not yet completete then runnable_steps has to be with some respective steps, hence if it is empty -> failure
-                return Message(conversation_id=conversation_id, step_index=start_step_index, sender="coordinator", receiver="user", target_agent=None, 
+                message = Message(conversation_id=conversation_id, step_index=start_step_index, sender="coordinator", receiver="user", target_agent=None, 
                                message_type="execution_failed",status="failed", 
                                response={"message": "Execution blocked: no runnable steps found."}, visibility="external")
+                
+                self.memory.store_message(message)
+
+                return message
 
             permission_steps = self.get_permission_required_steps(runnable_steps)
 
@@ -225,8 +237,11 @@ class Coordinator():
         '''
 
         if not approved:
-            return Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, 
+            message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, 
                            message_type="workflow_result", status="cancelled",response={"message": "Noted. The task will not be executed."}, visibility="external")
+            
+            self.memory.store_message(message)
+            return message
 
         #executing the exact runnable wave which was already shown to the user and approved
         executor_msg = self.executor.run_set_tools(conversation_id=conversation_id, step_index=step_index, execution_state=execution_state, 
@@ -256,8 +271,11 @@ class Coordinator():
                                           executor_msg=next_executor_msg, step_index=self.REVIEWER_STEP, review_retry_used=False)
         
         #Fall back return statement if something unexpected breaks inside the workflow
-        return Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, message_type="workflow_result",
+        message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, message_type="workflow_result",
                        status="failed",response={"message": "Unexpected breakage in the workflow", "details": executor_msg.response}, visibility="external")
+        
+        self.memory.store_message(message)
+        return message
     
     '''
         Helper functions for the respective permission steps
@@ -288,7 +306,7 @@ class Coordinator():
                 "description": description
             })
 
-        return Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, message_type="permission_request", status="waiting",
+        message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, message_type="permission_request", status="waiting",
                     response={
                         "message": "Do you approve of these requested tools to be executed?",
                         "requested_tools": requested_tools,
@@ -299,6 +317,10 @@ class Coordinator():
                         "next_step_index": step_index
                     },
                         visibility="external")
+        
+        self.memory.store_message(message)
+
+        return message
     
 
     '''
