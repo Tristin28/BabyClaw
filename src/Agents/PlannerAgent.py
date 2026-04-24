@@ -88,14 +88,14 @@ class PlannerAgent(Agent):
                             {planner_input["context"]}
                             Available tools:
                             {planner_input["tools"]}
+                            Workspace content:
+                            {planner_input["workspace_contents"]}
                     """
             }
         ]
 
         #Seperating the recenent messages underneath their respective role
-        history_messages = [{"role": ("user" if msg["sender"] == "user" else "assistant"), "content": msg["content"]}
-                            for msg in planner_input["k_recent_messages"] 
-                            if msg["sender"]=="user" or msg["sender"]=="coordinator" and msg["visibility"]=="external"]
+        history_messages = [{"role": ("user" if msg["sender"] == "user" else "assistant"), "content": msg["content"]} for msg in planner_input["k_recent_messages"]]
         messages.extend(history_messages)
 
         return messages
