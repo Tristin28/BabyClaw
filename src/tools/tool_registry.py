@@ -4,8 +4,8 @@ from src.tools.file_tools import read_file, list_dir
 from src.tools.llm_tools import create_summarise_txt_func
 
 
-def make_tool_registry_entry(func: Callable[..., Any], description: str, input_map: dict[str, str]) -> dict[str, Any]:
-    return {"func": func, "description": description, "input_map": input_map}
+def make_tool_registry_entry(func: Callable[..., Any], description: str, input_map: dict[str, str], requires_permission: bool) -> dict[str, Any]:
+    return {"func": func, "description": description, "input_map": input_map, "requires_permission": requires_permission}
 
 
 def build_tool_registry(llm_client: OllamaClient) -> dict[str, dict[str, Any]]:
@@ -22,6 +22,7 @@ def build_tool_registry(llm_client: OllamaClient) -> dict[str, dict[str, Any]]:
             input_map={
                 "path": "path",
             },
+            requires_permission=False
         ),
         "list_dir": make_tool_registry_entry(
             func=list_dir,
@@ -29,6 +30,7 @@ def build_tool_registry(llm_client: OllamaClient) -> dict[str, dict[str, Any]]:
             input_map={
                 "path": "path",
             },
+            requires_permission=False
         ),
         "summarise_txt": make_tool_registry_entry(
             func=summarise_txt,
@@ -36,5 +38,6 @@ def build_tool_registry(llm_client: OllamaClient) -> dict[str, dict[str, Any]]:
             input_map={
                 "text": "source_step",
             },
+            requires_permission=False
         ),
     }
