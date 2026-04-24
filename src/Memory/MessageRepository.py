@@ -47,9 +47,13 @@ class MessageRepository():
         with self.db_manager.get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT sender, response, timestamp
+                SELECT sender, response, visibility, timestamp
                 FROM messages
                 WHERE conversation_id = ?
+                AND (
+                    sender = 'user'
+                    OR (sender = 'coordinator' AND visibility = 'external')
+                )
                 ORDER BY timestamp DESC
                 LIMIT ?
                 """,
@@ -58,8 +62,13 @@ class MessageRepository():
 
         rows = list(reversed(rows))
 
-        return [{"sender": row["sender"], 
-                 "content": row["response"] #Leaving it as text because this will be passed inside the prompt planner
-                 }
-                for row in rows
-                ]
+        return [
+            {
+                "sender": row["sender"],
+                "content": row["response"], #Leaving it as text because this will be passed inside the prompt planner
+                "visibility": row["visibility"]
+            }
+            for row in rows
+        ]
+    
+     
