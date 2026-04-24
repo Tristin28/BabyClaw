@@ -78,6 +78,7 @@ class MemoryAgent(Agent):
                 "error": str(e)
             }
         
+        #Only returning to indicate whether it actually saved the information or not
         return Message(conversation_id=message.conversation_id, step_index=message.step_index, sender="memory", receiver="coordinator", 
                        target_agent=None, message_type="sql_store", status=status,response=response, visibility="internal") 
 
@@ -266,5 +267,6 @@ class MemoryAgent(Agent):
                 "error": str(e)
             }
 
+        #Only returning message to indicate whether storing relative content succeeded or not
         return Message(conversation_id=conversation_id, step_index=step_index, sender="memory", receiver="coordinator", target_agent=None, 
                        message_type="memory_store", status=status, response=response, visibility="internal")
