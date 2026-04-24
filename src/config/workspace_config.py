@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-
 CONFIG_PATH = Path("config/workspace_config.json")
 
 def load_workspace_path() -> str:
@@ -11,7 +10,6 @@ def load_workspace_path() -> str:
             return data.get("workspace_root", "./workspace")
 
     return "./workspace"
-
 
 def save_workspace_path(path: str):
     CONFIG_PATH.parent.mkdir(exist_ok=True)
