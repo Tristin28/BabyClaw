@@ -14,20 +14,6 @@ class Coordinator():
     REVIEWER_STEP = 3
     MEMORY_STEP = 4
     FINAL_STEP = 5
-
-    EPISODE_SUMMARY_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "episode_summary": {
-                "type": "string",
-                "description": (
-                    "A short factual summary of what the user asked, what the "
-                    "system planned and executed, and what the outcome was."
-                )
-            }
-        },
-        "required": ["episode_summary"]
-    }
      
     def __init__(self,planner:PlannerAgent, executor:ExecutorAgent, reviewer:ReviewerAgent, memory:MemoryAgent, 
                  planner_tool_descriptions: list[dict], tool_registry: dict, llm_client: OllamaClient):
@@ -320,12 +306,8 @@ class Coordinator():
     '''
     def create_epsiodic_summary(self, user_task: str, planner_response: dict, executor_response: dict, reviewer_response: dict) -> str:
         """
-        Uses the LLM to produce a concise, factual episode summary from the
-        completed workflow.  This summary is what the MemoryAgent uses to
-        decide what, if anything, should enter long-term semantic memory.
- 
-        Falls back to a minimal string on LLM failure so the rest of the
-        workflow is never blocked.
+            Uses the LLM to produce a concise, factual episode summary from the completed workflow. This summary is what the MemoryAgent uses to decide 
+            whether something is useful to be considered as long-term semantic memory, and if no outcome is retrieved from llm a fallback summary is coded.
         """
         messages = [
             {
@@ -352,19 +334,12 @@ class Coordinator():
         ]
  
         try:
-            result = self.llm_client.invoke_json(
-                messages=messages,
-                stream=False,
-                schema=self.EPISODE_SUMMARY_SCHEMA,
-            )
-            summary = result.get("episode_summary", "").strip()
-            if summary:
-                return summary
+            summary = self.llm_client.invoke_text(messages=messages, stream=False).strip()
+            if summary: #if condition to make sure it did not return ""
+                return summary 
         except Exception:
-            pass  # fall through to the safe fallback below
- 
-        # Fallback: construct a minimal summary from what we already have so
-        # the MemoryAgent still receives something useful.
+            pass  #letting the error slide, as if llm connection does not happen then the pre-coded summary would be sent instead
+
         goal = planner_response.get("goal", user_task)
         review = reviewer_response.get("review_summary", "completed successfully")
-        return f"The user asked: '{user_task}'. Goal: {goal}. Outcome: {review}."
+        return f"Goal: {goal}. Outcome: {review}."
