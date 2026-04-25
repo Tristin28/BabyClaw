@@ -1,6 +1,12 @@
-'''
-    Testing out the respective pipeline with generated code
-'''
+"""
+Testing out the BabyClaw pipeline.
+This runner:
+- prints permission requests clearly
+- prints compiled plans
+- prints execution traces
+- avoids printing raw Message(...) objects
+"""
+
 from src.Agents.Planning.PlannerAgent import PlannerAgent
 from src.Agents.ExecutorAgent import ExecutorAgent
 from src.Agents.MemoryAgent import MemoryAgent
@@ -15,81 +21,185 @@ from src.tools.utils import WorkspaceConfig
 from src.config.workspace_config import load_workspace_path, save_workspace_path
 
 
+def print_indent(value, indent: str = "    "):
+    text = str(value)
+
+    for line in text.splitlines():
+        print(f"{indent}{line}")
+
+
+def render_plan(plan_response: dict):
+    if not plan_response:
+        return
+
+    steps = plan_response.get("steps", [])
+
+    if not steps:
+        return
+
+    print("\nCompiled plan:")
+
+    for step in steps:
+        print(
+            f"- Step {step.get('id')} | "
+            f"Tool: {step.get('tool')} | "
+            f"Args: {step.get('args')} | "
+            f"Depends on: {step.get('depends_on', [])}"
+        )
+
+
+def render_execution_trace(trace: list[dict]):
+    if not trace:
+        print("\nExecution trace: None")
+        return
+
+    print("\nExecution trace:")
+
+    for step in trace:
+        step_id = step.get("id", "?")
+        tool = step.get("tool", "unknown_tool")
+        status = step.get("status", "unknown")
+
+        print(f"\nStep {step_id}")
+        print(f"  Tool: {tool}")
+        print(f"  Status: {status}")
+
+        if "args" in step:
+            print(f"  Args: {step['args']}")
+
+        if "depends_on" in step:
+            print(f"  Depends on: {step['depends_on']}")
+
+        if "result" in step:
+            print("  Result:")
+            print_indent(step["result"])
+
+        if "error" in step:
+            print("  Error:")
+            print_indent(step["error"])
+
+
 def render_message(msg: Message):
     print()
+    print("=" * 70)
+
+    response = msg.response or {}
 
     if msg.message_type == "permission_request":
-        print("System: Permission required.")
-        for tool in msg.response["requested_tools"]:
-            print(f"- Step {tool['step_id']} | {tool['tool']}")
+        print("System: Permission is required before continuing.\n")
 
-    elif msg.message_type == "execution_wave_result":
-        print("System: Execution wave completed.")
+        print("Requested tools:")
+        for tool in response.get("requested_tools", []):
+            print(f"- Step {tool.get('step_id')} | Tool: {tool.get('tool')}")
+            print(f"  Args: {tool.get('args')}")
+            print(f"  Description: {tool.get('description')}")
 
-    elif msg.message_type == "execution_failed":
-        print("System: Execution failed.")
-        print(msg.response)
+        render_plan(response.get("plan_response", {}))
 
-    elif msg.message_type == "workflow_result":
+        print("\nReply with 'yes' to approve or 'no' to cancel.")
+        print("=" * 70)
+        return
 
-        print(f"System: {msg.response.get('message','')}")
+    if msg.status == "failed":
+        print("System: Task failed.\n")
 
-        if "review_summary" in msg.response:
-            print(f"Review: {msg.response['review_summary']}")
+        if "message" in response:
+            print(f"Message: {response['message']}")
 
-        if "issues" in msg.response:
-            for issue in msg.response["issues"]:
+        if "error" in response:
+            print(f"Reason: {response['error']}")
+
+        if "review_summary" in response:
+            print(f"Review: {response['review_summary']}")
+
+        issues = response.get("issues", [])
+        if issues:
+            print("\nIssues:")
+            for issue in issues:
                 print(f"- {issue}")
 
-        if "execution_trace" in msg.response:
+        execution_state = response.get("execution_state")
+        if execution_state:
+            render_execution_trace(execution_state.get("execution_trace", []))
 
-            print("\nExecution trace:")
+        print("=" * 70)
+        return
 
-            for step in msg.response["execution_trace"]:
+    if msg.status == "cancelled":
+        print(f"System: {response.get('message', 'Task cancelled.')}")
+        print("=" * 70)
+        return
 
-                print(
-                    f"- Step {step['id']} | "
-                    f"{step['tool']} | "
-                    f"{step['status']}"
-                )
+    if msg.status == "completed":
+        print(f"System: {response.get('message', 'Task completed successfully.')}")
 
-                if "result" in step:
-                    print("  Output:")
-                    print(step["result"])
+        if "review_summary" in response:
+            print(f"\nReview: {response['review_summary']}")
+
+        render_execution_trace(response.get("execution_trace", []))
+
+        print("=" * 70)
+        return
+
+    print("System: Received response.")
+    print(response)
+    print("=" * 70)
+
+
+def print_suggested_tests():
+    print("Suggested tests:")
+    print("1. append to hello.txt by saying hey")
+    print("2. read hello.txt")
+    print("3. summarise hello.txt")
+    print("4. create a file called Start.txt and inside it write hello")
+    print("5. summarise the start file")
+    print("6. read hello file and summarise it")
+    print()
 
 
 def main():
-    '''
-        Main application entry point.
-        This is what lets the user communicate with the agent system.
-    '''
     llm_client = OllamaClient(model="qwen2.5:3b")
+
     workspace = WorkspaceConfig(load_workspace_path())
     tool_registry = build_tool_registry(llm_client, workspace)
+
     db_manager = DatabaseManager("memory.db")
     db_manager.init_db()
-
-    planner_tool_descriptions = PLANNER_TOOL_DESCRIPTIONS
 
     planner = PlannerAgent(llm_client=llm_client)
     executor = ExecutorAgent(tool_registry=tool_registry)
     reviewer = ReviewerAgent(llm_client=llm_client)
     memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
 
-    coordinator = Coordinator(planner=planner, executor=executor, reviewer=reviewer, memory=memory,
-                              planner_tool_descriptions=planner_tool_descriptions, tool_registry=tool_registry,
-                              llm_client=llm_client)
+    coordinator = Coordinator(
+        planner=planner,
+        executor=executor,
+        reviewer=reviewer,
+        memory=memory,
+        planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
+        tool_registry=tool_registry,
+        llm_client=llm_client
+    )
 
     conversation_id = 1
-
-    #This stores a paused workflow when permission is needed
     pending_permission = None
 
     print("BabyClaw is ready.")
-    print("Type a task, or type 'exit' to stop.\n")
+    print("Type a task, or type 'exit' to stop.")
+    print("Type 'set workspace <path>' to change workspace.\n")
+
+    print_suggested_tests()
 
     while True:
         user_input = input("You: ").strip()
+
+        if user_input == "":
+            continue
+
+        if user_input.lower() == "exit":
+            print("Exiting.")
+            break
+
         if user_input.startswith("set workspace "):
             new_path = user_input.replace("set workspace ", "").strip()
 
@@ -102,54 +212,38 @@ def main():
 
             continue
 
-        if user_input.lower() == "exit":
-            print("Exiting.")
-            break
-
-        if user_input == "":
-            continue
-
-        #If there is a pending permission request, treat the user's input as yes/no
         if pending_permission is not None:
             if user_input.lower() not in ["yes", "no"]:
-                print("System: Previous pending task cancelled. Starting new task instead.")
-                pending_permission = None
-                print("Please answer with 'yes' or 'no'.")
+                print("System: Please answer the pending permission request with 'yes' or 'no'.")
                 continue
 
             approved = user_input.lower() == "yes"
 
-            msg = coordinator.continue_after_permission(conversation_id=conversation_id,
-                                                        user_task=pending_permission["user_task"],
-                                                        plan_response=pending_permission["plan_response"],
-                                                        execution_state=pending_permission["execution_state"],
-                                                        pending_runnable_steps=pending_permission["pending_runnable_steps"],
-                                                        step_index=pending_permission["next_step_index"],
-                                                        approved=approved)
+            msg = coordinator.continue_after_permission(
+                conversation_id=conversation_id,
+                user_task=pending_permission["user_task"],
+                plan_response=pending_permission["plan_response"],
+                execution_state=pending_permission["execution_state"],
+                pending_runnable_steps=pending_permission["pending_runnable_steps"],
+                step_index=pending_permission["next_step_index"],
+                approved=approved
+            )
 
             pending_permission = None
 
         else:
-            msg = coordinator.start_workflow(conversation_id=conversation_id, user_task=user_input)
+            msg = coordinator.start_workflow(
+                conversation_id=conversation_id,
+                user_task=user_input
+            )
 
-        #If coordinator needs permission, save the workflow state and ask user
         if msg.status == "waiting" and msg.message_type == "permission_request":
             pending_permission = msg.response
-
-            print("\nSystem: Permission is required before continuing.")
-            print("Requested tools:")
-
-            for tool in msg.response["requested_tools"]:
-                print(f"\n- Step {tool['step_id']} | Tool: {tool['tool']} | {tool['description']}")
-
-            print("\nReply with 'yes' to approve or 'no' to cancel.\n")
+            render_message(msg)
             continue
 
-        #Otherwise print final workflow result
         render_message(msg)
-        print()
 
-        #If workflow fully ended, clear any saved permission state
         if msg.status in ["completed", "failed", "cancelled"]:
             pending_permission = None
 

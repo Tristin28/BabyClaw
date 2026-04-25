@@ -42,6 +42,8 @@ class Coordinator():
             '''
             for _ in range(max_attempts):
                 planner_msg = self.planner.run(planner_input=planner_input)
+                error = planner_msg.response.get("error","")
+                planner_input["context"] += f"\nPrevious planner error to fix: {error}"
                 self.memory.store_message(planner_msg)
 
                 if planner_msg.status == "completed":
@@ -97,7 +99,7 @@ class Coordinator():
         Messages sent to the runner file in order for the response field to be sent to the user in order for it to know what happened with its task
     '''
     def build_success_message(self, conversation_id: int, step_index: int, review_summary: str, execution_response: dict) -> Message:
-        trace = execution_response.get("step_results", [])
+        trace = execution_response.get("execution_trace", [])
         trace = sorted(trace, key=lambda step: step["id"])
 
         message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, 
@@ -213,7 +215,7 @@ class Coordinator():
 
                 return message
 
-            permission_steps = self.get_permission_required_steps(runnable_steps)
+            permission_steps = self.get_permission_required_steps(runnable_steps,execution_state=execution_state)
 
             if permission_steps:
                 #Exits back to the start_workflow method which has to be routed back to the user so that it asks it the respective message being sent
@@ -248,6 +250,9 @@ class Coordinator():
             
             self.memory.store_message(message)
             return message
+        
+        execution_state["approved_step_ids"].update(step["id"] for step in pending_runnable_steps 
+                                                    if self.tool_registry.get(step["tool"], {}).get("requires_permission", False))
 
         #executing the exact runnable wave which was already shown to the user and approved
         executor_msg = self.executor.run_set_tools(conversation_id=conversation_id, step_index=step_index, execution_state=execution_state, 
@@ -286,14 +291,15 @@ class Coordinator():
     '''
         Helper functions for the respective permission steps
     '''
-    def get_permission_required_steps(self, runnable_steps: list[dict]) -> list[dict]:
+    def get_permission_required_steps(self, runnable_steps: list[dict], execution_state: dict) -> list[dict]:
             permission_steps = []
 
+            approved_ids = execution_state.get("approved_step_ids", set())
             for step in runnable_steps:
                 tool_name = step["tool"]
                 tool_def = self.tool_registry.get(tool_name, {})
 
-                if tool_def.get("requires_permission", False):
+                if tool_def.get("requires_permission", False) and step["id"] not in approved_ids:
                     permission_steps.append(step)
 
             return permission_steps #represents another sublist but this time of the respective list which contains the steps that are currently available to be executed
@@ -309,6 +315,7 @@ class Coordinator():
             requested_tools.append({
                 "step_id": step["id"],
                 "tool": tool_name,
+                "args": step["args"],
                 "description": description
             })
 
@@ -347,7 +354,6 @@ class Coordinator():
                     "what tools were executed and what they produced, and what the "
                     "reviewer concluded. "
                     "Be concise (2-4 sentences). Do not add opinions or speculation. "
-                    "Return only valid JSON matching the schema."
                 ),
             },
             {

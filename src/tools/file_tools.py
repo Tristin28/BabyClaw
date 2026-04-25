@@ -37,6 +37,37 @@ def list_dir(workspace: WorkspaceConfig, path: str = ".",) -> list[str]:
 
     return [item.name for item in dir_path.iterdir()]
 
+def find_file(workspace: WorkspaceConfig, query: str, directory: str = ".") -> str:
+    """
+    Finds exactly one file inside the workspace matching the query.
+    Returns:
+        Exact relative file path as a string.
+    Fails if:
+        - no file matches
+        - more than one file matches
+    """
+    dir_path = resolve_workspace_path(workspace, directory)
+
+    if not dir_path.exists():
+        raise FileNotFoundError(f"Directory '{directory}' not found")
+
+    if not dir_path.is_dir():
+        raise ValueError(f"'{directory}' is not a directory")
+
+    matches = []
+
+    for item in dir_path.iterdir():
+        if item.is_file() and query.lower() in item.name.lower():
+            matches.append(item.name)
+
+    if len(matches) == 0:
+        raise FileNotFoundError(f"No file matching '{query}' found")
+
+    if len(matches) > 1:
+        raise ValueError(f"Multiple files match '{query}': {matches}")
+
+    return matches[0]
+
 def create_file(workspace: WorkspaceConfig, path: str, content: str = "") -> str:
     file_path = resolve_workspace_path(workspace, path)
 

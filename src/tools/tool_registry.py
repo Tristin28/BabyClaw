@@ -1,6 +1,6 @@
 from typing import Any, Callable
 from src.OllamaClient import OllamaClient
-from src.tools.file_tools import read_file, list_dir, create_file, write_file, append_file
+from src.tools.file_tools import read_file, list_dir, find_file, create_file, write_file, append_file
 from src.tools.llm_tools import create_summarise_txt_func
 from src.tools.utils import WorkspaceConfig
 
@@ -33,12 +33,22 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
             },
             requires_permission=False
         ),
+        
+        "find_file": make_tool_registry_entry(
+            func=lambda query, directory=".": find_file(workspace, query, directory),
+            description="Finds exactly one file in the workspace matching a partial filename query.",
+            input_map={
+                "query": "query",
+                "directory": "directory"
+            },
+            requires_permission=False
+        ),
 
         "summarise_txt": make_tool_registry_entry(
             func=summarise_txt,
             description="Summarises text produced by a previous step.",
             input_map={
-                "text": "source_step",
+                "text": "text",
             },
             requires_permission=False
         ),

@@ -19,7 +19,8 @@ class ExecutorAgent(Agent):
             "remaining_steps": plan_response["steps"][:], #Copying the list so that we dont remove elements from the actual step list too (since mutable)
             "step_results": {},
             "step_status": {},
-            "execution_trace": []
+            "execution_trace": [],
+            "approved_step_ids": set() #storing which steps already got permission - in order to fix the bug which was asking permission many times for the same thing
         }
     
     def is_execution_complete(self, execution_state: dict) -> bool:
@@ -48,7 +49,8 @@ class ExecutorAgent(Agent):
     def build_execution_result(self, execution_state: dict) -> dict:
         return {
             "goal": execution_state["goal"],
-            "step_results": execution_state["execution_trace"]
+            "execution_trace": execution_state["execution_trace"],
+            "step_results": execution_state["step_results"]
         }
     
     def validate_result(self, tool_name: str, result: Any):
@@ -60,8 +62,9 @@ class ExecutorAgent(Agent):
             raise ValueError(f"Tool '{tool_name}' returned None")
 
         EMPTY_NOT_ALLOWED = {"summarise_txt"} #tools which should not return empty strings
-        if tool_name in EMPTY_NOT_ALLOWED and result.strip() == "":
-            raise ValueError(f"Tool '{tool_name}' returned an empty string")
+        if tool_name in EMPTY_NOT_ALLOWED:
+            if not isinstance(result, str) or result.strip() == "":
+                raise ValueError(f"Tool '{tool_name}' returned an empty string")
 
         if isinstance(result, (list, dict, tuple, set)) and len(result) == 0:
             raise ValueError(f"Tool '{tool_name}' returned an empty {type(result).__name__}")
@@ -95,11 +98,13 @@ class ExecutorAgent(Agent):
                     step_status[step["id"]] = "completed"
                     completed_ids.append(step["id"])
 
-                    execution_trace.append({"id": step["id"], "tool": step["tool"], "status": "completed", "result": result})
+                    execution_trace.append({"id": step["id"], "tool": step["tool"], "args":step.get("args",{}), "depends_on": step.get("depends_on",[]), 
+                                            "status": "completed", "result": result})
 
                 except Exception as e:
                     step_status[step["id"]] = "failed"
-                    execution_trace.append({"id": step["id"], "tool": step["tool"], "status": "failed", "error": str(e)})
+                    execution_trace.append({"id": step["id"], "tool": step["tool"], "args":step.get("args",{}), "depends_on": step.get("depends_on",[]), 
+                                            "status": "failed", "error": str(e)})
                     
                     #propogating the error upward into the stack frames which will be handled by the run method however, it has to be directed accordingly in coord
                     raise RuntimeError(f"Step {step['id']} failed: {e}") from e
@@ -133,22 +138,27 @@ class ExecutorAgent(Agent):
         '''
         resolved_args = {}
         for real_arg, planner_arg in input_map.items():
-            if planner_arg not in args:
-                raise ValueError(f"Missing planner argument: '{planner_arg}'")
-            
-            value = args[planner_arg]
 
-            if planner_arg.endswith("_step"):
-                if not isinstance(value, int):
-                    raise ValueError(f"{planner_arg} must reference step id")
+            if planner_arg in args:
+                resolved_args[real_arg] = args[planner_arg]
+                continue
 
-                if value not in step_results:
-                    raise ValueError(f"Step result {value} not available yet")
-                
-                resolved_args[real_arg] = step_results[value]
-            else:
-                resolved_args[real_arg] = value
-        
+            step_arg = f"{planner_arg}_step"
+
+            if step_arg in args:
+                step_id = args[step_arg]
+
+                if not isinstance(step_id, int):
+                    raise ValueError(f"{step_arg} must reference an integer step id")
+
+                if step_id not in step_results:
+                    raise ValueError(f"Step result {step_id} not available yet")
+
+                resolved_args[real_arg] = step_results[step_id]
+                continue
+
+            raise ValueError(f"Missing planner argument: expected '{planner_arg}' or '{step_arg}'")
+
         return resolved_args
 
     def run_set_tools(self, conversation_id: int, step_index: int, execution_state: dict, runnable_steps: list[dict]) -> Message:

@@ -1,8 +1,8 @@
-def make_tool_description(name: str, description: str, args_schema: dict[str, dict[str,str]]) -> dict:
+def make_tool_description(name: str, description: str, args_schema: dict[str, dict[str,str]], returns: dict) -> dict:
     """
         Creates a planner-facing tool description, so that the llm understands what tools exist and what arguments they require.
     """
-    return {"name": name, "description": description, "args_schema": args_schema}
+    return {"name": name, "description": description, "args_schema": args_schema, "returns": returns}
 
 
 '''
@@ -24,9 +24,11 @@ PLANNER_TOOL_DESCRIPTIONS = [
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative path of the file inside the workspace"
+                "description": "Relative path of the file inside the workspace",
+                "step_chainable": True
             }
         },
+        returns= {"type": "string"}
     ),
 
     make_tool_description(
@@ -43,96 +45,124 @@ PLANNER_TOOL_DESCRIPTIONS = [
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative directory path inside workspace. Use '.' to list workspace root."
+                "description": "Relative directory path inside workspace. Use '.' to list workspace root.",
+                "step_chainable": False
             }
         },
+        returns= {"type": "array"}
+    ),
+
+    make_tool_description(
+        name="find_file",
+        description=(
+            "Find exactly one file inside the workspace sandbox using a partial filename query. "
+            "Use this when the user clearly refers to a file but does not provide the exact filename or extension. "
+            "Do not use this if the user already provided the exact filename. "
+            "Use this before read_file when read_file needs an exact path but the user gave only a partial file name. "
+            "Fails if no files match or if multiple files match."
+        ),
+        args_schema={
+            "query": {
+                "type": "string",
+                "description": "Partial filename or search term to match.",
+                "step_chainable": False
+            },
+            "directory": {
+                "type": "string",
+                "description": "Directory to search inside. Use '.' for the workspace root.",
+                "step_chainable": False
+            }
+        },
+        returns={"type": "string"}
     ),
 
     make_tool_description(
         name="summarise_txt",
         description=(
             "Summarise text produced by a previous step. "
-            "Use this when another step has already returned text that needs to be shortened into a clear summary. "
-            "Do not use this directly on a file path or directory path; use read_file first to obtain the text content. "
-            "Use this after read_file or after another text-producing tool. "
-            "The 'source_step' argument must be the id of the earlier step that produced the text to summarise. "
-            "Returns: summary as a string."
+            "Use this when the user gives text directly or when a previous step produced text. "
+            "Use text_step when summarising output from a previous step such as read_file. "
+            "Do not pass a file path directly."
         ),
         args_schema={
-            "source_step":{
+            "text":{
                 "type": "integer",
-                "description": "ID of a previous step that produced text to summarise"
+                "description": "ID of a previous step that produced text to summarise",
+                "step_chainable": True
             }
         },
+        returns={"type": "string"}
     ),
 
     make_tool_description(
         name="create_file",
         description=(
             "Create a new file inside the workspace sandbox. "
-            "Use this when the user asks to create a new file, optionally with initial content. "
-            "Do not use this to overwrite an existing file; use write_file for that. "
-            "This tool requires user permission because it modifies the workspace. "
-            "The 'path' argument must be the relative file path inside the workspace. "
-            "The 'content' argument is the initial text to place inside the file. "
-            "Returns: confirmation message as a string."
+            "Use this when the user asks to create a new file. "
+            "If the user also gives content to put inside the file, place that content in the content argument. "
+            "Do not use this to overwrite an existing file. "
+            "Returns a confirmation string."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative path of the new file inside the workspace"
+                "description": "Relative path of the new file inside the workspace.",
+                "step_chainable": False
             },
             "content": {
                 "type": "string",
-                "description": "Initial text content to write into the new file"
+                "description": "Initial text content to write into the file. Can use content_step if content comes from a previous step.",
+                "step_chainable": True
             }
         },
+        returns={"type": "string"}
     ),
     
     make_tool_description(
         name="write_file",
         description=(
             "Write text content to a file inside the workspace sandbox. "
-            "Use this when the user asks to save, write, or overwrite content in a file. "
-            "This may overwrite existing file content, so it requires user permission. "
-            "Do not use this when the user only asks to display the result in the terminal. "
-            "Use this after a text-producing step such as summarise_txt if the user asks to save the output. "
-            "The 'path' argument must be the relative file path inside the workspace. "
-            "The 'content' argument is the text to write. "
-            "Returns: confirmation message as a string."
+            "Use this when the user asks to write, save, or overwrite content in a file. "
+            "Use content_step if the content comes from a previous step such as summarise_txt. "
+            "Do not use this when the user only wants the result displayed. "
+            "Returns a confirmation string."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative path of the file inside the workspace"
+                "description": "Relative path of the file inside the workspace.",
+                "step_chainable": False
             },
             "content": {
                 "type": "string",
-                "description": "Text content to write into the file"
+                "description": "Text content to write. Can use content_step if content comes from a previous step.",
+                "step_chainable": True
             }
         },
+        returns={"type": "string"}
     ),
 
     make_tool_description(
         name="append_file",
         description=(
             "Append text content to the end of a file inside the workspace sandbox. "
-            "Use this when the user asks to add content to an existing file without replacing its current contents. "
-            "This modifies the workspace, so it requires user permission. "
-            "Do not use this when the user wants to overwrite the whole file; use write_file instead. "
-            "The 'path' argument must be the relative file path inside the workspace. "
-            "The 'content' argument is the text to append. "
-            "Returns: confirmation message as a string."
+            "Use this when the user asks to add content without replacing existing content. "
+            "Use content_step if the content comes from a previous step. "
+            "Do not use this to overwrite the whole file. "
+            "Returns a confirmation string."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative path of the file inside the workspace"
+                "description": "Relative path of the file inside the workspace.",
+                "step_chainable": False
             },
             "content": {
                 "type": "string",
-                "description": "Text content to append to the file"
+                "description": "Text content to append. Can use content_step if content comes from a previous step.",
+                "step_chainable": True
             }
         },
+        returns={"type": "string"}
     )
 ]
