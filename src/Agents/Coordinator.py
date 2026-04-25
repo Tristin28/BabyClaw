@@ -1,4 +1,4 @@
-from src.Agents.PlannerAgent import PlannerAgent
+from src.Agents.Planning.PlannerAgent import PlannerAgent
 from src.Agents.ExecutorAgent import ExecutorAgent
 from src.Agents.MemoryAgent import MemoryAgent
 from src.Agents.ReviewerAgent import ReviewerAgent
@@ -31,11 +31,11 @@ class Coordinator():
         '''
             Building the respective planner input for the planner agent to handle it and process it, so that the llm would know how to reason
         '''
-        workspace_contents = list_dir() #giving the planner llm access to what contents the directory it operates over contains
+        workspace_contents = self.tool_registry["list_dir"]["func"](path=".") #giving the planner llm access to what contents the directory it operates over contains
         return {"task": user_task, "context": context, "k_recent_messages": k_recent_messages, "tools": self.planner_tool_descriptions, 
                 "conversation_id": conversation_id, "step_index": step_index, "workspace_contents": workspace_contents}
 
-    def try_plan(self,planner_input: dict, max_attempts: int = 2) -> Message:
+    def try_plan(self,planner_input: dict, max_attempts: int = 3) -> Message:
             '''
                 Method which handles the raised exceptions for when the planner is running so that it manages the respective cases by replaning or 
                 else tells coordinator that it can't handle this respective task.
@@ -97,9 +97,12 @@ class Coordinator():
         Messages sent to the runner file in order for the response field to be sent to the user in order for it to know what happened with its task
     '''
     def build_success_message(self, conversation_id: int, step_index: int, review_summary: str, execution_response: dict) -> Message:
+        trace = execution_response.get("step_results", [])
+        trace = sorted(trace, key=lambda step: step["id"])
+
         message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, 
                            message_type="workflow_result", status="completed",
-                           response={"message": "Task completed successfully.", "review_summary": review_summary, "execution_trace": execution_response.get("step_results", [])}, 
+                           response={"message": "Task completed successfully.", "review_summary": review_summary, "execution_trace": trace}, 
                            visibility="external")
         
         self.memory.store_message(message)
@@ -114,7 +117,7 @@ class Coordinator():
         self.memory.store_message(message)
 
         return message
-    
+
 
     def start_workflow(self, conversation_id: int, user_task: str):
         '''
@@ -195,7 +198,7 @@ class Coordinator():
         #Initialising it to this respective message if while loop does not re-set execution_msg to the corresponding message
         executor_msg = Message(conversation_id=conversation_id, step_index=start_step_index, sender="coordinator", receiver="user", target_agent=None, 
                                message_type="workflow_result",status="failed", 
-                               response={"message": "Something unexpected occured in the execution loop."}, visibility="external")
+                               response={"message": "Planner produced no executable steps."}, visibility="external")
         
         while not self.executor.is_execution_complete(execution_state):
             runnable_steps = self.executor.get_runnable_wave(execution_state)
