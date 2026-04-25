@@ -1,4 +1,4 @@
-from src.Agents.PlannerAgent import PlannerAgent
+from src.Agents.Planning.PlannerAgent import PlannerAgent
 from src.OllamaClient import OllamaClient
 
 def main():
