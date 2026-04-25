@@ -32,7 +32,12 @@ class Coordinator():
             Building the respective planner input for the planner agent to handle it and process it, so that the llm would know how to reason
         '''
         workspace_contents = self.tool_registry["list_dir"]["func"](path=".") #giving the planner llm access to what contents the directory it operates over contains
-        return {"task": user_task, "context": context, "k_recent_messages": k_recent_messages, "tools": self.planner_tool_descriptions, 
+
+        available_tools = self.planner_tool_descriptions
+        if not self.is_likely_workspace_task(user_task):
+            available_tools = [tool for tool in self.planner_tool_descriptions if tool["name"] == "direct_response"]
+
+        return {"task": user_task, "context": context, "k_recent_messages": k_recent_messages, "tools": available_tools, 
                 "conversation_id": conversation_id, "step_index": step_index, "workspace_contents": workspace_contents}
 
     def try_plan(self,planner_input: dict, max_attempts: int = 3) -> Message:
@@ -42,18 +47,39 @@ class Coordinator():
             '''
             for _ in range(max_attempts):
                 planner_msg = self.planner.run(planner_input=planner_input)
-                error = planner_msg.response.get("error","")
-                planner_input["context"] += f"\nPrevious planner error to fix: {error}"
                 self.memory.store_message(planner_msg)
 
                 if planner_msg.status == "completed":
                     return planner_msg
-
+                
                 error = planner_msg.response.get("error", "")
-
                 if "Unknown tool" in error:
                     return planner_msg   #stop immediately
+                
+                planner_input["context"] += f"""
+                    Previous planning attempt failed.
 
+                    Compiler error:
+                    {error}
+
+                    Fix the plan and try again.
+
+                    Important correction rule:
+                    If a value comes from a previous step, use the argument name ending in _step.
+
+                    Correct:
+                    {{"content_step": 1}}
+                    {{"text_step": 1}}
+                    {{"path_step": 1}}
+
+                    Wrong:
+                    {{"content": "text_step:1"}}
+                    {{"text": 1}}
+
+                    For example:
+                    If step 2 creates a file using the contents from step 1, use:
+                    {{"path": "BabyClaw", "content_step": 1}}
+                    """
             return planner_msg  #failed after retries
     
     def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict, executor_response: dict,reviewer_response: dict) -> Message:
@@ -74,16 +100,16 @@ class Coordinator():
         planner_input = self.build_planner_input(user_task=str(revised_task), context=context, k_recent_messages=k_recent_messages,
                                                 conversation_id=conversation_id, step_index=self.PLANNER_STEP)
 
-        planner_msg = self.planner.run(planner_input=planner_input)
-        self.memory.store_message(message=planner_msg)
-
+        planner_msg = self.try_plan(planner_input=planner_input)
         if planner_msg.status == "failed":
-            return self.build_failure_message(conversation_id=conversation_id, step_index= self.FINAL_STEP,
-                                            review_summary="Replanning failed after reviewer rejected the result.",
-                                            issues=[planner_msg.response.get("error", "Unknown replanning error.")])
+            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP, 
+                                              review_summary="Replanning failed after reviewer rejected the result.", 
+                                              issues=[planner_msg.response.get("error", "Unknown replanning error.")]
+                                              )
+
 
         new_plan_response = planner_msg.response
-        execution_state = self.executor.initialise_execution_state(new_plan_response)
+        execution_state = self.executor.initialise_execution_state(plan_response=plan_response, context=context, recent_messages=k_recent_messages)
 
         executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state, start_step_index=self.EXECUTOR_STEP,
                                                user_task=user_task, plan_response=new_plan_response)
@@ -142,7 +168,7 @@ class Coordinator():
         plan_response = planner_msg.response
 
         #sending the respective accepted response to the user so that it knows what it will do and user will have to verify  
-        execution_state = self.executor.initialise_execution_state(plan_response)
+        execution_state = self.executor.initialise_execution_state(plan_response=plan_response, context=context, recent_messages=k_recent_messages)
         executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state, start_step_index=self.EXECUTOR_STEP, 
                                        user_task=user_task, plan_response=plan_response)
 
@@ -377,3 +403,50 @@ class Coordinator():
         goal = planner_response.get("goal", user_task)
         review = reviewer_response.get("review_summary", "completed successfully")
         return f"Goal: {goal}. Outcome: {review}."
+    
+
+    def is_likely_workspace_task(self, user_task: str) -> bool:
+        """
+        Decides whether the task is clearly about workspace/file operations.
+
+        If this returns False, the Planner should only receive direct_response,
+        because the user is probably chatting or asking a normal question.
+        """
+        text = user_task.lower()
+
+        file_keywords = [
+            "file",
+            "folder",
+            "directory",
+            "workspace",
+            "read",
+            "create",
+            "write to",
+            "save",
+            "append",
+            "overwrite",
+            "replace",
+            "delete",
+            "list",
+            "find file",
+            "summarise file",
+            "summarize file",
+        ]
+
+        file_extensions = [
+            ".txt",
+            ".py",
+            ".json",
+            ".md",
+            ".csv",
+            ".docx",
+            ".pdf",
+        ]
+
+        if any(ext in text for ext in file_extensions):
+            return True
+
+        if any(keyword in text for keyword in file_keywords):
+            return True
+
+        return False

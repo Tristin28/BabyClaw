@@ -38,3 +38,58 @@ def create_summarise_txt_func(llm: OllamaClient) -> Callable[[str], str]:
         return summary.strip()
 
     return summarise_txt
+
+def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", recent_messages: list[dict] = None) -> str:
+    """
+        This tool is used when the user wants a normal chatbot-style answer, such as greetings, explanations, email drafts, advice, rewrites, or
+        questions about previous conversation.
+    """
+    if not isinstance(prompt, str):
+        raise TypeError("direct_response expected a string prompt")
+
+    if prompt.strip() == "":
+        raise ValueError("direct_response prompt cannot be empty")
+
+    recent_messages = recent_messages or []
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are the final response generator for an AI agent system. "
+                "Answer the user directly and clearly. "
+                "Use the provided memory and recent conversation when relevant. "
+                "Do not mention internal tools, plans, execution traces, or hidden workflow details. "
+                "If the answer is not available in memory or recent conversation, say that you do not know."
+            )
+        }
+    ]
+
+    if context:
+        messages.append({
+            "role": "system",
+            "content": f"Relevant memory/context:\n{context}"
+        })
+
+    if recent_messages:
+        conversation_text = "\n".join(
+            f"{msg.get('sender', 'unknown')}: {msg.get('content', '')}"
+            for msg in recent_messages
+        )
+
+        messages.append({
+            "role": "system",
+            "content": f"Recent conversation:\n{conversation_text}"
+        })
+
+    messages.append({
+        "role": "user",
+        "content": prompt.strip()
+    })
+
+    response = llm_client.invoke_text(messages=messages, stream=False).strip()
+
+    if response == "":
+        raise ValueError("direct_response produced an empty response")
+
+    return response

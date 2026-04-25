@@ -1,7 +1,7 @@
 from typing import Any, Callable
 from src.OllamaClient import OllamaClient
 from src.tools.file_tools import read_file, list_dir, find_file, create_file, write_file, append_file
-from src.tools.llm_tools import create_summarise_txt_func
+from src.tools.llm_tools import create_summarise_txt_func, direct_response
 from src.tools.utils import WorkspaceConfig
 
 def make_tool_registry_entry(func: Callable[..., Any], description: str, input_map: dict[str, str], requires_permission: bool) -> dict[str, Any]:
@@ -33,7 +33,7 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
             },
             requires_permission=False
         ),
-        
+
         "find_file": make_tool_registry_entry(
             func=lambda query, directory=".": find_file(workspace, query, directory),
             description="Finds exactly one file in the workspace matching a partial filename query.",
@@ -82,4 +82,13 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
             },
             requires_permission=True
         ),
+
+        "direct_response": make_tool_registry_entry(
+            func=lambda prompt, context="", recent_messages=None: direct_response(llm_client=llm_client, prompt=prompt, context=context,recent_messages=recent_messages),
+            description="Uses the LLM to generate a direct response to the user without modifying files.",
+            input_map={
+                "prompt": "prompt"
+            },
+            requires_permission=False
+        )
     }

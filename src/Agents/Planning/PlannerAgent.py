@@ -2,8 +2,10 @@ from src.OllamaClient import OllamaClient
 from src.Agents.BaseAgent import Agent
 from src.message import Message
 from src.Agents.Planning.PlanCompiler import PlanCompiler
+from src.Agents.Planning.PlannerPrompt import PLANNER_SYSTEM_PROMPT
 
 class PlannerAgent(Agent):
+    PLANNER_SYSTEM_PROMPT = PLANNER_SYSTEM_PROMPT
     def __init__(self, llm_client:OllamaClient):
         self.llm_client = llm_client
         super().__init__("planner") #setting the name field for when sending the message
@@ -17,141 +19,7 @@ class PlannerAgent(Agent):
             {
                 #Agent's personality and instructions - system prompt
                 "role": "system",
-                "content": """
-                    You are a planning agent.
-
-                    Your job is to convert the user's task into a minimal structured execution plan using only the provided tools.
-
-                    You do NOT execute tools.
-                    You do NOT answer the user directly.
-                    You do NOT invent tools, arguments, files, or dependencies.
-
-                    Return only a valid JSON plan that matches the required schema.
-
-                    --------------------------------------------------
-                    Planning rules
-
-                    1. Use only tools from the Available tools list.
-                    2. Every step must correspond to exactly one tool.
-                    3. Fill arguments exactly as required by each tool's args_schema.
-                    4. Prefer the smallest valid plan that solves the task.
-                    5. Do not add unnecessary steps.
-                    6. If the user already provides argument values, use them directly.
-                    7. If an argument depends on a previous step result, use a *_step reference.
-
-                    Example:
-
-                    If step 2 needs the output of step 1:
-
-                    {
-                    "id": 2,
-                    "tool": "summarise_txt",
-                    "args": {"text_step": 1}
-                    }
-
-                    --------------------------------------------------
-                    Argument rules
-
-                    8. Use *_step only when the argument comes from a previous step result.
-                    9. *_step must always reference an earlier step id.
-                    10. *_step must never contain filenames or raw text.
-                    11. Do not invent earlier steps just to use *_step.
-
-                    --------------------------------------------------
-                    File handling rules
-
-                    12. If the user provides an exact filename, use it directly.
-                    13. If the filename is ambiguous, check Workspace contents before choosing.
-                    14. Do not guess file extensions. If the user refers to a file without an exact filename or extension, use find_file first.
-                        - If the user provides an exact filename, do not use find_file.
-                    15. If the correct file cannot be identified safely, do not invent one.
-                    
-                    --------------------------------------------------
-                    Context usage rules
-
-                    16. Treat the CURRENT TASK as the primary instruction.
-                    17. Use memory or conversation history only to resolve references like:
-                        - "it"
-                        - "that file"
-                        - "same as before"
-                        - "continue"
-                    18. Ignore memory if it conflicts with the current task.
-                    19. Never create extra steps just because something appears in memory.
-
-                    --------------------------------------------------
-                    Failure rule
-
-                    20. If no available tool can solve the task:
-
-                    Return:
-
-                    {
-                    "goal": "Explain why the task cannot be completed using available tools",
-                    "steps": [],
-                    "planning_rationale": "Brief explanation of why no available tool can solve the task"
-                    }
-
-                    --------------------------------------------------
-                    Output format rules
-
-                    21. Step ids must start at 1 and increase sequentially.
-                    22. Do not include depends_on.
-                    23. Do not include explanations outside JSON.
-                    24. Return only valid JSON.
-                    25. planning_rationale must be short.
-
-                    --------------------------------------------------
-                    Example 1
-
-                    User task:
-                    append to hello.txt by saying hey
-
-                    Correct output:
-
-                    {
-                    "goal": "Append text to hello.txt",
-                    "steps": [
-                            {
-                            "id": 1,
-                            "tool": "append_file",
-                            "args": {
-                                "path": "hello.txt",
-                                "content": "hey"
-                                }
-                            }
-                        ],
-                    "planning_rationale": "The user provided the file path and text, so one append step is enough."
-                    }
-
-                    --------------------------------------------------
-                    Example 2
-
-                    User task:
-                    summarise hello.txt
-
-                    Correct output:
-
-                    {
-                    "goal": "Read and summarise hello.txt",
-                    "steps": [
-                        {
-                            "id": 1,
-                            "tool": "read_file",
-                            "args": {
-                                "path": "hello.txt"
-                            }
-                        },
-                        {
-                            "id": 2,
-                            "tool": "summarise_txt",
-                            "args": {
-                                "text_step": 1
-                            }
-                        }
-                    ],
-                    "planning_rationale": "The file must first be read, then summarised."
-                    }
-                """
+                "content": PlannerAgent.PLANNER_SYSTEM_PROMPT
             }
         ]
 
@@ -195,41 +63,39 @@ class PlannerAgent(Agent):
             tool_name = tool["name"]
             args_schema = tool["args_schema"]
 
-            direct_properties = {}
-            direct_required = []
+            properties = {}
+            required = []
+            one_of_groups = []
 
-            step_properties = {}
-            step_required = []
-
-            for arg_name, arg_spec in args_schema.items(): #arg_name= the function's argument name and arg_spec represents what tool_description says about it 
+            for arg_name, arg_spec in args_schema.items():
                 arg_type = arg_spec["type"]
                 is_chainable = arg_spec.get("step_chainable", False)
 
-                direct_properties[arg_name] = {"type": arg_type}
-                direct_required.append(arg_name)
-
                 if is_chainable:
                     step_arg_name = f"{arg_name}_step"
-                    step_properties[step_arg_name] = {"type": "integer"}
-                    step_required.append(step_arg_name)
 
-            arg_variants = []
+                    properties[arg_name] = {"type": arg_type}
+                    properties[step_arg_name] = {"type": "integer"}
 
-            arg_variants.append({
+                    one_of_groups.append({
+                        "oneOf": [
+                            {"required": [arg_name]},
+                            {"required": [step_arg_name]}
+                        ]
+                    })
+                else:
+                    properties[arg_name] = {"type": arg_type}
+                    required.append(arg_name)
+
+            args_object_schema = {
                 "type": "object",
-                "properties": direct_properties,
-                "required": direct_required,
-                "additionalProperties": False
-            })
+                "properties": properties,
+                "required": required,
+                "additionalProperties": False,
+            }
 
-            # Step-derived version, only if tool has chainable args
-            if step_properties:
-                arg_variants.append({
-                    "type": "object",
-                    "properties": step_properties,
-                    "required": step_required,
-                    "additionalProperties": False
-                })
+            if one_of_groups:
+                args_object_schema["allOf"] = one_of_groups
 
             tool_variants.append({
                 "type": "object",
@@ -239,9 +105,7 @@ class PlannerAgent(Agent):
                         "type": "string",
                         "enum": [tool_name]
                     },
-                    "args": {
-                        "oneOf": arg_variants
-                    }
+                    "args": args_object_schema
                 },
                 "required": ["id", "tool", "args"],
                 "additionalProperties": False

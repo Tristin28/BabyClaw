@@ -164,5 +164,23 @@ PLANNER_TOOL_DESCRIPTIONS = [
             }
         },
         returns={"type": "string"}
+    ),
+    
+    make_tool_description(
+        name="direct_response",
+        description=(
+            "Generate a direct response to the user using the LLM. "
+            "Use this when the user asks for an explanation, email draft, message draft, "
+            "rewrite, answer, or any text that should be shown directly instead of saved to a file. "
+            "Do not use this if the user explicitly asks to create, write, append, or overwrite a file."
+        ),
+        args_schema={
+            "prompt": {
+                "type": "string",
+                "description": "The instruction or user request that the LLM should answer directly.",
+                "step_chainable": True
+            }
+        },
+        returns={"type": "string"}
     )
 ]

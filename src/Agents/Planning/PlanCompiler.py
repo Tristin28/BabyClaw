@@ -1,62 +1,104 @@
 class PlanCompiler:
     """
-    Main idea is that planner chooses the tools and args then this component will rewrites step ids by infering depends_on from args ending in _step.
+    Deterministic compiler for Planner-generated plans.
+
+    The Planner is allowed to suggest:
+        - which tools to use
+        - which arguments to pass
+        - when an argument should come from a previous step using *_step
+
+    The Planner is NOT trusted to control execution directly.
+
+    This compiler is responsible for:
+        1. Validating the top-level plan shape.
+        2. Rewriting step ids into deterministic order: 1..N.
+        3. Remapping *_step references to the rewritten ids.
+        4. Rejecting fake dependency syntax inside string values.
+        5. Validating tool names and argument names.
+        6. Validating direct argument types.
+        7. Ensuring *_step is only used on chainable arguments.
+        8. Inferring depends_on from *_step arguments.
+        9. Validating the final dependency graph.
+
+    Core design rule:
+        Dependencies are created ONLY from argument names ending in "_step".
+
+    Correct:
+        {"content_step": 1}
+
+    Wrong:
+        {"content": "text_step:1"}
+        {"text": 1}
     """
 
     REQUIRED_TOP_LEVEL_FIELDS = {
         "goal": str,
         "steps": list,
-        "planning_rationale": str
+        "planning_rationale": str,
     }
 
     REQUIRED_STEP_FIELDS = {
         "tool": str,
-        "args": dict
+        "args": dict,
     }
 
     def __init__(self, available_tools: list[dict]):
+        """
+        available_tools should be the same planner-facing tool descriptions
+        given to the PlannerAgent.
+
+        Expected tool format:
+            {
+                "name": "read_file",
+                "args_schema": {
+                    "path": {
+                        "type": "string",
+                        "step_chainable": False
+                    }
+                }
+            }
+        """
         self.available_tools = available_tools
-        self.tool_names = {tool["name"] for tool in available_tools}
+
+        self.tool_names = {
+            tool["name"]
+            for tool in available_tools
+        }
+
         self.tool_args_schema = {
             tool["name"]: tool["args_schema"]
             for tool in available_tools
         }
-    
-    def normalise_step_ids(self, raw_steps: list[dict]) -> list[dict]:
-        """
-            Rewrites planner step ids to deterministic order: 1..N and builds mapping old_id -> new_id
-        """
-        self.old_to_new_id = {}
 
-        normalised_steps = []
+        # Created during normalise_step_ids().
+        # Maps planner-provided ids to compiler-normalised ids.
+        self.old_to_new_id: dict[int, int] = {}
 
-        for new_id, step in enumerate(raw_steps, start=1):
-            if not isinstance(step, dict):
-                raise ValueError(f"Step {new_id} must be a dictionary.")
-
-            old_id = step.get("id")
-
-            if isinstance(old_id, int):
-                self.old_to_new_id[old_id] = new_id
-
-            normalised_steps.append({
-                "id": new_id,
-                "tool": step.get("tool"),
-                "args": step.get("args", {}),
-                "depends_on": []  # rebuilt later
-            })
-
-        return normalised_steps
-    
     def compile(self, raw_plan: dict) -> dict:
         """
         Main public method.
-        This is the only method PlannerAgent needs to call.
+
+        PlannerAgent should call only this method.
+
+        The compile order matters:
+
+        1. Validate raw plan shape.
+        2. Rewrite step ids into deterministic 1..N order.
+        3. Remap *_step references from old ids to new ids.
+        4. Reject fake step references inside strings.
+        5. Validate tools and arguments.
+        6. Infer dependencies from *_step arguments.
+        7. Validate final dependencies.
+
+        If any validation fails, a ValueError is raised.
+        The Coordinator can then retry planning using the compiler error.
         """
         self.validate_top_level_schema(raw_plan)
 
         normalised_steps = self.normalise_step_ids(raw_plan["steps"])
         normalised_steps = self.remap_step_arguments(normalised_steps)
+
+        self.reject_fake_step_strings(normalised_steps)
         self.validate_step_args_are_allowed(normalised_steps)
 
         normalised_steps = self.infer_dependencies_from_step_args(normalised_steps)
@@ -65,36 +107,138 @@ class PlanCompiler:
         return {
             "goal": raw_plan["goal"],
             "steps": normalised_steps,
-            "planning_rationale": raw_plan["planning_rationale"]
+            "planning_rationale": raw_plan["planning_rationale"],
         }
 
     def validate_top_level_schema(self, raw_plan: dict) -> None:
+        """
+        Validates the outer structure of the Planner response.
+
+        Expected:
+            {
+                "goal": str,
+                "steps": list,
+                "planning_rationale": str
+            }
+        """
         if not isinstance(raw_plan, dict):
             raise ValueError("Planner response must be a dictionary.")
 
         for field, expected_type in self.REQUIRED_TOP_LEVEL_FIELDS.items():
             if field not in raw_plan:
-                raise ValueError(f"Planner response missing top-level field: {field}")
+                raise ValueError(
+                    f"Planner response missing top-level field '{field}'."
+                )
 
             if not isinstance(raw_plan[field], expected_type):
                 raise ValueError(
-                    f"Planner response field '{field}' must be {expected_type.__name__}."
+                    f"Planner response field '{field}' must be "
+                    f"{expected_type.__name__}, got {type(raw_plan[field]).__name__}."
                 )
 
         if len(raw_plan["steps"]) == 0:
             raise ValueError("Planner produced no executable steps.")
 
+    def normalise_step_ids(self, raw_steps: list[dict]) -> list[dict]:
+        """
+        Rewrites step ids into deterministic order: 1..N.
+
+        Why this exists:
+            The LLM may skip ids, duplicate ids, or produce unstable ids.
+            The compiler fixes this by using list order as the source of truth.
+
+        Example:
+            Planner ids: 10, 20, 30
+            Compiler ids: 1, 2, 3
+
+        Also builds:
+            self.old_to_new_id
+
+        This lets *_step references be remapped safely.
+        """
+        self.old_to_new_id = {}
+        normalised_steps = []
+
+        for new_id, step in enumerate(raw_steps, start=1):
+            if not isinstance(step, dict):
+                raise ValueError(
+                    f"Step {new_id} must be a dictionary."
+                )
+
+            self.validate_raw_step_shape(step, new_id)
+
+            old_id = step.get("id")
+
+            if isinstance(old_id, int):
+                if old_id in self.old_to_new_id:
+                    raise ValueError(
+                        f"Planner produced duplicate step id {old_id}."
+                    )
+
+                self.old_to_new_id[old_id] = new_id
+            else:
+                # If the planner forgot an id, allow the compiler to use
+                # the normalised id as both old and new.
+                self.old_to_new_id[new_id] = new_id
+
+            normalised_steps.append({
+                "id": new_id,
+                "tool": step["tool"],
+                "args": step.get("args", {}),
+                # We never trust planner-provided depends_on.
+                # Dependencies are rebuilt later from *_step args.
+                "depends_on": [],
+            })
+
+        return normalised_steps
+
+    def validate_raw_step_shape(self, step: dict, position: int) -> None:
+        """
+        Validates the basic shape of one raw planner step.
+
+        Required:
+            {
+                "tool": str,
+                "args": dict
+            }
+
+        The planner may also include "id", but the compiler normalises it.
+        """
+        for field, expected_type in self.REQUIRED_STEP_FIELDS.items():
+            if field not in step:
+                raise ValueError(
+                    f"Step {position} is missing required field '{field}'."
+                )
+
+            if not isinstance(step[field], expected_type):
+                raise ValueError(
+                    f"Step {position} field '{field}' must be "
+                    f"{expected_type.__name__}, got {type(step[field]).__name__}."
+                )
 
     def remap_step_arguments(self, steps: list[dict]) -> list[dict]:
         """
-        Remaps args such as source_step from old planner ids to new compiler ids.
+        Remaps all *_step argument values from planner ids to compiler ids.
+
+        Example:
+            Planner output:
+                Step id 10
+                Step id 20 uses {"text_step": 10}
+
+            Compiler output:
+                Step 1
+                Step 2 uses {"text_step": 1}
+
+        Only arguments whose NAME ends with "_step" are treated as dependencies.
         """
         for step in steps:
             current_id = step["id"]
             args = step.get("args", {})
 
             if not isinstance(args, dict):
-                raise ValueError(f"Step {current_id} args must be a dictionary.")
+                raise ValueError(
+                    f"Step {current_id} args must be a dictionary."
+                )
 
             remapped_args = {}
 
@@ -103,7 +247,7 @@ class PlanCompiler:
                     remapped_args[arg_name] = self.remap_step_reference(
                         current_id=current_id,
                         arg_name=arg_name,
-                        arg_value=arg_value
+                        arg_value=arg_value,
                     )
                 else:
                     remapped_args[arg_name] = arg_value
@@ -112,38 +256,285 @@ class PlanCompiler:
 
         return steps
 
-    def remap_step_reference(self, current_id: int, arg_name: str, arg_value: int) -> int:
+    def remap_step_reference(
+        self,
+        current_id: int,
+        arg_name: str,
+        arg_value: int,
+    ) -> int:
         """
         Validates and remaps one *_step argument.
+
+        Correct:
+            {"text_step": 1}
+
+        Requirements:
+            - value must be an integer
+            - value must reference an existing planner step
+            - value must reference an earlier step
+            - value cannot reference itself or a future step
         """
-        if not isinstance(arg_value, int):
+        if not isinstance(arg_value, int) or isinstance(arg_value, bool):
             raise ValueError(
-                f"Step {current_id} argument '{arg_name}' must reference an integer step id."
+                f"Step {current_id} argument '{arg_name}' must reference "
+                f"an integer step id, got {type(arg_value).__name__}."
             )
 
         if arg_value <= 0:
             raise ValueError(
-                f"Step {current_id} argument '{arg_name}' cannot reference step {arg_value}."
+                f"Step {current_id} argument '{arg_name}' cannot reference "
+                f"invalid step id {arg_value}."
             )
 
         if arg_value not in self.old_to_new_id:
             raise ValueError(
-                f"Step {current_id} argument '{arg_name}' references unknown step {arg_value}."
+                f"Step {current_id} argument '{arg_name}' references "
+                f"unknown step {arg_value}."
             )
 
         new_reference = self.old_to_new_id[arg_value]
 
         if new_reference >= current_id:
             raise ValueError(
-                f"Step {current_id} argument '{arg_name}' must reference an earlier step."
+                f"Step {current_id} argument '{arg_name}' must reference "
+                f"an earlier step, but references step {new_reference}."
             )
 
         return new_reference
 
+    def reject_fake_step_strings(self, steps: list[dict]) -> None:
+        """
+        Rejects cases where the Planner placed a step reference inside a string.
+
+        This is invalid because dependencies are inferred from argument NAMES,
+        not from argument VALUES.
+
+        Wrong:
+            {"content": "text_step:1"}
+            {"path": "path_step:1"}
+            {"text": "step_1"}
+
+        Correct:
+            {"content_step": 1}
+            {"path_step": 1}
+            {"text_step": 1}
+
+        Why this matters:
+            If this is not rejected, the Executor treats "text_step:1" as
+            literal text instead of resolving it from step 1.
+        """
+        fake_step_markers = [
+            "_step:",
+            "_step=",
+            "_step ->",
+            "_step=>",
+        ]
+
+        for step in steps:
+            step_id = step["id"]
+            tool_name = step["tool"]
+            args = step.get("args", {})
+
+            for arg_name, arg_value in args.items():
+                if not isinstance(arg_value, str):
+                    continue
+
+                compact_value = arg_value.replace(" ", "").lower()
+
+                contains_fake_marker = any(
+                    marker.replace(" ", "") in compact_value
+                    for marker in fake_step_markers
+                )
+
+                looks_like_step_reference = (
+                    compact_value.endswith("_step")
+                    or compact_value.startswith("step:")
+                    or compact_value.startswith("step_")
+                )
+
+                if contains_fake_marker or looks_like_step_reference:
+                    expected_step_arg = f"{arg_name}_step"
+
+                    raise ValueError(
+                        f"Step {step_id} tool '{tool_name}' has a fake step "
+                        f"reference inside normal argument '{arg_name}'. "
+                        f"Wrong: {{'{arg_name}': '{arg_value}'}}. "
+                        f"If this value comes from a previous step, use "
+                        f"{{'{expected_step_arg}': <previous_step_id>}} instead."
+                    )
+
+    def validate_step_args_are_allowed(self, steps: list[dict]) -> None:
+        """
+        Validates every tool call after ids and step references are normalised.
+
+        Checks:
+            1. Tool exists.
+            2. Args are a dictionary.
+            3. Direct args exist in the tool schema.
+            4. Direct arg values match their schema type.
+            5. *_step args refer to real schema args.
+            6. *_step is only allowed when step_chainable=True.
+
+        Important:
+            This method does not infer dependencies.
+            It only validates whether the arguments are legal.
+        """
+        for step in steps:
+            step_id = step["id"]
+            tool_name = step["tool"]
+            args = step["args"]
+
+            if tool_name not in self.tool_args_schema:
+                raise ValueError(
+                    f"Step {step_id} uses unknown tool '{tool_name}'."
+                )
+
+            if not isinstance(args, dict):
+                raise ValueError(
+                    f"Step {step_id} args must be a dictionary."
+                )
+
+            args_schema = self.tool_args_schema[tool_name]
+
+            for arg_name, arg_value in args.items():
+                if arg_name.endswith("_step"):
+                    self.validate_step_arg(
+                        step_id=step_id,
+                        tool_name=tool_name,
+                        arg_name=arg_name,
+                        arg_value=arg_value,
+                        args_schema=args_schema,
+                    )
+                else:
+                    self.validate_direct_arg(
+                        step_id=step_id,
+                        tool_name=tool_name,
+                        arg_name=arg_name,
+                        arg_value=arg_value,
+                        args_schema=args_schema,
+                    )
+
+    def validate_direct_arg(
+        self,
+        step_id: int,
+        tool_name: str,
+        arg_name: str,
+        arg_value,
+        args_schema: dict,
+    ) -> None:
+        """
+        Validates a normal argument.
+
+        Example:
+            {"path": "hello.txt"}
+            {"content": "hello"}
+
+        A direct argument must:
+            - exist in the tool's args_schema
+            - have the correct type
+        """
+        if arg_name not in args_schema:
+            raise ValueError(
+                f"Step {step_id} tool '{tool_name}' has unknown arg '{arg_name}'."
+            )
+
+        expected_type = args_schema[arg_name]["type"]
+
+        if not self.matches_schema_type(arg_value, expected_type):
+            raise ValueError(
+                f"Step {step_id} tool '{tool_name}' arg '{arg_name}' must be "
+                f"{expected_type}, got {type(arg_value).__name__}. "
+                f"If this value should come from a previous step, use "
+                f"'{arg_name}_step': <step_id> instead."
+            )
+
+    def validate_step_arg(
+        self,
+        step_id: int,
+        tool_name: str,
+        arg_name: str,
+        arg_value,
+        args_schema: dict,
+    ) -> None:
+        """
+        Validates a step-derived argument.
+
+        Example:
+            {"text_step": 1}
+            {"content_step": 2}
+            {"path_step": 1}
+
+        A *_step argument must:
+            - reference a real base argument
+            - be allowed by step_chainable=True
+            - have an integer value
+
+        The actual dependency reference was already checked/remapped earlier.
+        This method checks whether the tool schema allows this kind of chaining.
+        """
+        base_arg = arg_name.removesuffix("_step")
+
+        if base_arg not in args_schema:
+            raise ValueError(
+                f"Step {step_id} tool '{tool_name}' has unknown step arg "
+                f"'{arg_name}'. Base arg '{base_arg}' does not exist."
+            )
+
+        if not args_schema[base_arg].get("step_chainable", False):
+            raise ValueError(
+                f"Step {step_id} tool '{tool_name}' arg '{base_arg}' cannot "
+                f"use _step because step_chainable=False."
+            )
+
+        if not isinstance(arg_value, int) or isinstance(arg_value, bool):
+            raise ValueError(
+                f"Step {step_id} tool '{tool_name}' arg '{arg_name}' must be "
+                f"an integer step id, got {type(arg_value).__name__}."
+            )
+
+    def matches_schema_type(self, value, expected_type: str) -> bool:
+        """
+        Converts simple JSON-schema-style types into Python runtime checks.
+
+        This protects the Executor from cases like:
+            {"text": 1}
+
+        If "text" expects a string, then integer 1 is rejected.
+        The Planner must use:
+            {"text_step": 1}
+        if it wants the output of step 1.
+        """
+        if expected_type == "string":
+            return isinstance(value, str)
+
+        if expected_type == "integer":
+            return isinstance(value, int) and not isinstance(value, bool)
+
+        if expected_type == "array":
+            return isinstance(value, list)
+
+        if expected_type == "object":
+            return isinstance(value, dict)
+
+        if expected_type == "boolean":
+            return isinstance(value, bool)
+
+        # Unknown schema types are ignored for now.
+        # You can make this stricter later if needed.
+        return True
+
     def infer_dependencies_from_step_args(self, steps: list[dict]) -> list[dict]:
         """
-        We do not trust the planner's depends_on.
-        We infer dependencies from arguments ending in _step.
+        Rebuilds depends_on from *_step arguments.
+
+        We do not trust Planner-provided depends_on.
+
+        Example:
+            Step 2 args:
+                {"text_step": 1}
+
+            Compiler output:
+                "depends_on": [1]
         """
         for step in steps:
             dependencies = set()
@@ -156,76 +547,41 @@ class PlanCompiler:
 
         return steps
 
-    def matches_schema_type(self, value, expected_type: str) -> bool:
-        if expected_type == "string":
-            return isinstance(value, str)
-        if expected_type == "integer":
-            return isinstance(value, int) and not isinstance(value, bool)
-        if expected_type == "array":
-            return isinstance(value, list)
-        if expected_type == "object":
-            return isinstance(value, dict)
-        if expected_type == "boolean":
-            return isinstance(value, bool)
-        return True
-
-    def validate_step_args_are_allowed(self, steps: list[dict]) -> None:
-        for step in steps:
-            step_id = step["id"]
-            tool_name = step["tool"]
-            args = step["args"]
-
-            if tool_name not in self.tool_args_schema:
-                raise ValueError(f"Step {step_id} uses unknown tool '{tool_name}'")
-        
-            args_schema = self.tool_args_schema[tool_name]
-
-            for arg_name in args.keys():
-
-                # Direct arg
-                if not arg_name.endswith("_step"):
-                    if arg_name not in args_schema:
-                        raise ValueError(
-                            f"Step {step_id} tool '{tool_name}' has unknown arg '{arg_name}'"
-                        )
-                   
-                    expected_type = args_schema[arg_name]["type"]
-
-                    if not self.matches_schema_type(args[arg_name], expected_type):
-                        raise ValueError(
-                            f"Step {step_id} tool '{tool_name}' arg '{arg_name}' must be {expected_type}"
-                        )
-
-                    continue
-
-                # Step-derived arg
-                base_arg = arg_name.removesuffix("_step")
-
-                if base_arg not in args_schema:
-                    raise ValueError(
-                        f"Step {step_id} tool '{tool_name}' has unknown step arg '{arg_name}'"
-                    )
-
-                if not args_schema[base_arg].get("step_chainable", False):
-                    raise ValueError(
-                        f"Step {step_id} tool '{tool_name}' arg '{base_arg}' cannot use _step"
-                    )
-
     def validate_dependencies(self, steps: list[dict]) -> None:
-        valid_step_ids = {step["id"] for step in steps}
+        """
+        Final dependency graph validation.
+
+        Ensures:
+            - every dependency is an integer
+            - every dependency points to an existing step
+            - no step depends on itself
+            - no step depends on a future step
+        """
+        valid_step_ids = {
+            step["id"]
+            for step in steps
+        }
 
         for step in steps:
             current_id = step["id"]
 
             for dep_id in step["depends_on"]:
-                if not isinstance(dep_id, int):
-                    raise ValueError(f"Step {current_id} has a non-integer dependency.")
+                if not isinstance(dep_id, int) or isinstance(dep_id, bool):
+                    raise ValueError(
+                        f"Step {current_id} has a non-integer dependency."
+                    )
 
                 if dep_id not in valid_step_ids:
-                    raise ValueError(f"Step {current_id} depends on unknown step {dep_id}.")
+                    raise ValueError(
+                        f"Step {current_id} depends on unknown step {dep_id}."
+                    )
 
                 if dep_id == current_id:
-                    raise ValueError(f"Step {current_id} cannot depend on itself.")
+                    raise ValueError(
+                        f"Step {current_id} cannot depend on itself."
+                    )
 
                 if dep_id > current_id:
-                    raise ValueError(f"Step {current_id} cannot depend on a future step.")
+                    raise ValueError(
+                        f"Step {current_id} cannot depend on future step {dep_id}."
+                    )

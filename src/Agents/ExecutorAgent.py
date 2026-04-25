@@ -8,7 +8,7 @@ class ExecutorAgent(Agent):
         super().__init__("executor")
         self.tool_registry = tool_registry #setting as an instance field so that sets of tools can be exchanged depending on what user enables, i.e. coord sets it
 
-    def initialise_execution_state(self, plan_response: dict) -> dict:
+    def initialise_execution_state(self, plan_response: dict, context: str = "", recent_messages: list[dict] = None) -> dict:
         ''' 
             Initialisting an execution state so that the coordinator would be the one which keeps track of the steps running,
             this is done so that it interleaves with the executor and if any runnable steps are to have permission it asks the user before it executes the
@@ -20,7 +20,9 @@ class ExecutorAgent(Agent):
             "step_results": {},
             "step_status": {},
             "execution_trace": [],
-            "approved_step_ids": set() #storing which steps already got permission - in order to fix the bug which was asking permission many times for the same thing
+            "approved_step_ids": set(), #storing which steps already got permission - in order to fix the bug which was asking permission many times for the same thing
+            "context": context,
+            "recent_messages": recent_messages or [] #Depending on whether it is falsy or not
         }
     
     def is_execution_complete(self, execution_state: dict) -> bool:
@@ -83,7 +85,7 @@ class ExecutorAgent(Agent):
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             #Dict where key = result (of type future) and value would be current step being executed (i.e. value = dict)
-            future_step_result = {executor.submit(self.execute_step,step, step_results): step for  step in runnable_steps}
+            future_step_result = {executor.submit(self.execute_step,step, execution_state): step for  step in runnable_steps}
 
             completed_ids = []
 
@@ -114,7 +116,7 @@ class ExecutorAgent(Agent):
          
         return execution_state
 
-    def execute_step(self, plan_output_step: dict, step_results: dict) -> Any:
+    def execute_step(self, plan_output_step: dict, execution_state: dict) -> Any:
         tool_name = plan_output_step["tool"]
         if tool_name not in self.tool_registry:
             raise ValueError(f"Unknown tool {tool_name}")
@@ -124,18 +126,22 @@ class ExecutorAgent(Agent):
         tool_fn = tool_def ["func"] #stores the actual method
         input_map = tool_def["input_map"] #stores the arg name as key and its value would be key inside args (dict inside plan_output_step)
 
-        resolved_args = self.resolve_args(step_results=step_results, input_map=input_map, args =plan_output_step["args"] )
+        resolved_args = self.resolve_args(plan_output_step=plan_output_step, execution_state=execution_state, input_map=input_map) 
 
         result = tool_fn(**resolved_args)
         return result
     
-    def resolve_args(self, step_results: dict, input_map: dict, args: dict) -> dict:
+    def resolve_args(self, plan_output_step: dict, execution_state: dict, input_map: dict) -> dict: 
         '''
                 Takes in the argument values selected by the llm in the planning stage and initialisign them to the respective local variables of the chosen funciton
                 Where input_map will describe the argument name and what its value should be, and args will contain the value placeholder inside of input map as the key
                 and its value would be the value which needs to be set to that argument, and if this placeholder name would be source_step it indicates that the argument
                 needs to be initialised from a previous step
         '''
+        tool_name = plan_output_step["tool"] 
+        args = plan_output_step.get("args", {})
+        step_results = execution_state["step_results"]
+
         resolved_args = {}
         for real_arg, planner_arg in input_map.items():
 
@@ -158,6 +164,10 @@ class ExecutorAgent(Agent):
                 continue
 
             raise ValueError(f"Missing planner argument: expected '{planner_arg}' or '{step_arg}'")
+
+        if tool_name == "direct_response":
+            resolved_args["context"] = execution_state.get("context", "")
+            resolved_args["recent_messages"] = execution_state.get("recent_messages", [])
 
         return resolved_args
 
