@@ -59,7 +59,8 @@ class ExecutorAgent(Agent):
         if result is None:
             raise ValueError(f"Tool '{tool_name}' returned None")
 
-        if isinstance(result, str) and result.strip() == "":
+        EMPTY_NOT_ALLOWED = {"summarise_txt"} #tools which should not return empty strings
+        if tool_name in EMPTY_NOT_ALLOWED and result.strip() == "":
             raise ValueError(f"Tool '{tool_name}' returned an empty string")
 
         if isinstance(result, (list, dict, tuple, set)) and len(result) == 0:
