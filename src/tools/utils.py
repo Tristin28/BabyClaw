@@ -15,7 +15,7 @@ class WorkspaceConfig:
 
         self.root = new_path
 
-def resolve_workspace_path(relative_path: str, workspace: WorkspaceConfig) -> Path:
+def resolve_workspace_path(workspace: WorkspaceConfig, relative_path: str,) -> Path:
     """
         Method is used to resolve a safe absolute path inside the workspace directory
         i.e. it grabs the path the system gives (can be combined either with subdirectories inside workspace or just the respective files)
