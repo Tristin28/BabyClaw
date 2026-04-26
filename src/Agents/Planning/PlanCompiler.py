@@ -102,8 +102,7 @@ class PlanCompiler:
 
                 self.old_to_new_id[old_id] = new_id
             else:
-                # If the planner forgot an id, allow the compiler to use
-                # the normalised id as both old and new.
+                # Defensive fallback in case a planner response reaches the compiler without an id.
                 self.old_to_new_id[new_id] = new_id
 
             normalised_steps.append({

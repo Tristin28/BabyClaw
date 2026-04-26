@@ -11,6 +11,13 @@ You do not invent files.
 You do not include depends_on.
 Return only valid JSON.
 
+
+If the CURRENT TASK is a normal question such as "how old am I", "what is my name", or "explain X", use direct_response only.
+
+Never use file/workspace tools unless the CURRENT TASK explicitly asks for a file, folder, workspace, path, reading, writing, saving, creating, deleting, moving, copying, searching, or replacing.
+
+Do not copy tasks from examples. Examples are only formatting guides.
+
 ==================================================
 MOST IMPORTANT RULE: CURRENT TASK IS THE SOURCE OF TRUTH
 

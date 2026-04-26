@@ -33,20 +33,51 @@ class Coordinator():
         '''
         workspace_contents = self.tool_registry["list_dir"]["func"](path=".") #giving the planner llm access to what contents the directory it operates over contains
 
-        available_tools = self.planner_tool_descriptions
-        if not self.is_likely_workspace_task(user_task):
-            available_tools = [tool for tool in self.planner_tool_descriptions if tool["name"] == "direct_response"]
+        # Important:
+        # user_task must always be the original current user task as a string.
+        # Context, recent messages, and workspace contents are only extra support.
+        is_workspace_task = self.is_likely_workspace_task(user_task)
 
-        return {"task": user_task, "context": context, "k_recent_messages": k_recent_messages, "tools": available_tools, 
-                "conversation_id": conversation_id, "step_index": step_index, "workspace_contents": workspace_contents}
+        available_tools = self.planner_tool_descriptions
+
+        if not is_workspace_task:
+            available_tools = [
+                tool for tool in self.planner_tool_descriptions
+                if tool["name"] == "direct_response"
+            ]
+
+        print("\n[DEBUG - PLANNER INPUT]")
+        print("user_task:", user_task)
+        print("is_likely_workspace_task:", is_workspace_task)
+        print("available_tools:", [tool["name"] for tool in available_tools])
+        print("context:", context)
+        print("[/DEBUG - PLANNER INPUT]\n")
+
+        return {
+            "task": user_task,
+            "context": context,
+            "k_recent_messages": k_recent_messages,
+            "tools": available_tools,
+            "conversation_id": conversation_id,
+            "step_index": step_index,
+            "workspace_contents": workspace_contents
+        }
 
     def try_plan(self,planner_input: dict, max_attempts: int = 3) -> Message:
             '''
                 Method which handles the raised exceptions for when the planner is running so that it manages the respective cases by replaning or 
                 else tells coordinator that it can't handle this respective task.
             '''
+
+            # Use a local copy so compiler-retry feedback does not permanently
+            # modify the original planner_input used by other workflow stages.
+            retry_planner_input = dict(planner_input)
+
+            # Make sure context is copied as a string value.
+            retry_planner_input["context"] = planner_input.get("context", "")
+
             for _ in range(max_attempts):
-                planner_msg = self.planner.run(planner_input=planner_input)
+                planner_msg = self.planner.run(planner_input=retry_planner_input)
                 self.memory.store_message(planner_msg)
 
                 if planner_msg.status == "completed":
@@ -56,14 +87,16 @@ class Coordinator():
                 if "Unknown tool" in error:
                     return planner_msg   #stop immediately
                 
-                #Giving the replanning some feedback to what made the plan fail
-                planner_input["context"] += f"""
-                    Previous planning attempt failed. 
+                #Giving the planner retry some feedback about why the previous plan failed compilation
+                retry_planner_input["context"] += f"""
+                    Previous planning attempt failed during compilation.
 
                     Compiler error:
                     {error}
 
-                    Fix the plan and try again.
+                    Fix only the structure of the plan.
+                    The current task is still:
+                    {retry_planner_input["task"]}
 
                     Important correction rule:
                     If a value comes from a previous step, use the argument name ending in _step.
@@ -82,27 +115,124 @@ class Coordinator():
                     {{"path": "BabyClaw", "content_step": 1}}
                     """
             return planner_msg  #failed after retries
-    
+
+    def build_replan_context(self, original_context: str, previous_plan: dict, executor_response: dict, reviewer_response: dict) -> str:
+        '''
+            Builds a small amount of context for replanning.
+
+            The goal is not to dump everything into the Planner.
+            The goal is only to tell the Planner:
+                - what the previous goal was,
+                - what tools were used,
+                - what final result was produced,
+                - why the reviewer rejected it.
+        '''
+        execution_trace = executor_response.get("execution_trace", [])
+
+        simplified_trace = []
+
+        for step in execution_trace:
+            simplified_trace.append({
+                "id": step.get("id"),
+                "tool": step.get("tool"),
+                "args": step.get("args"),
+                "status": step.get("status"),
+                "result": step.get("result")
+            })
+
+        reviewer_issues = reviewer_response.get("issues", [])
+
+        return f"""
+                {original_context}
+
+                REPLAN CONTEXT:
+                The previous attempt was rejected.
+
+                Previous planner goal:
+                {previous_plan.get("goal", "N/A")}
+
+                Previous executed steps:
+                {json.dumps(simplified_trace, indent=2)}
+
+                Reviewer issues:
+                {json.dumps(reviewer_issues, indent=2)}
+
+                Replanning instruction:
+                Create a revised plan for the original current user task only.
+                Do not treat the previous plan as the task.
+                Do not treat the previous execution as the task.
+                Do not copy unrelated file names, paths, tools, or content from the failed attempt.
+                Only use this replan context to avoid repeating the same mistake.
+                """
+
+    def validate_plan_tool_scope(self, user_task: str, plan_response: dict) -> str | None:
+        '''
+            Checks that a non-workspace task did not accidentally receive workspace tools.
+            This protects the system from Planner mistakes before permission/execution.
+        '''
+        if self.is_likely_workspace_task(user_task):
+            return None
+
+        workspace_tools = {
+            "read_file",
+            "list_dir",
+            "find_file",
+            "summarise_txt",
+            "create_file",
+            "write_file",
+            "append_file",
+            "delete_file",
+            "search_text",
+            "replace_text",
+            "list_tree",
+            "find_file_recursive",
+            "create_dir",
+            "delete_dir",
+            "move_path",
+            "copy_path"
+        }
+
+        used_workspace_tools = []
+
+        for step in plan_response.get("steps", []):
+            tool_name = step.get("tool")
+
+            if tool_name in workspace_tools:
+                used_workspace_tools.append(tool_name)
+
+        if used_workspace_tools:
+            return (
+                f"Planner used workspace tools {used_workspace_tools}, "
+                f"but the current task does not ask for file or workspace operations."
+            )
+
+        return None
+
     def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict, 
                                       executor_response: dict,reviewer_response: dict, approved_actions: set) -> Message:
         '''
             This method is called when reviewer rejects the execution result. It gives the planner the reviewer issues so it can create a better plan.
         '''
-        revised_task = {
-            "original_task": user_task,
-            "previous_plan": plan_response,
-            "previous_execution": executor_response,
-            "reviewer_issues": reviewer_response.get("issues", []),
-            "instruction": "Create a revised plan that fixes the reviewer issues. Use only the available tools."
-        }
-
         context = self.memory.get_relevant_memory(task=user_task, k=5)
         k_recent_messages = self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
 
-        planner_input = self.build_planner_input(user_task=str(revised_task), context=context, k_recent_messages=k_recent_messages,
-                                                conversation_id=conversation_id, step_index=self.PLANNER_STEP)
+        replan_context = self.build_replan_context(
+            original_context=context,
+            previous_plan=plan_response,
+            executor_response=executor_response,
+            reviewer_response=reviewer_response
+        )
+
+        planner_input = self.build_planner_input(
+            user_task=user_task,
+            context=replan_context,
+            k_recent_messages=k_recent_messages,
+            conversation_id=conversation_id,
+            step_index=self.PLANNER_STEP
+        )
 
         planner_msg = self.try_plan(planner_input=planner_input)
+
         if planner_msg.status == "failed":
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP, 
                                               review_summary="Replanning failed after reviewer rejected the result.", 
@@ -111,8 +241,26 @@ class Coordinator():
                                               details=planner_msg.response
                                               )
 
-
         new_plan_response = planner_msg.response
+
+        plan_scope_error = self.validate_plan_tool_scope(
+            user_task=user_task,
+            plan_response=new_plan_response
+        )
+
+        if plan_scope_error:
+            return self.build_failure_message(
+                conversation_id=conversation_id,
+                step_index=self.FINAL_STEP,
+                review_summary="Replanning produced a plan outside the task scope.",
+                issues=[plan_scope_error],
+                execution_response=executor_response,
+                details={
+                    "user_task": user_task,
+                    "plan_response": new_plan_response
+                }
+            )
+
         execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response, context=context, recent_messages=k_recent_messages)
         if approved_actions:
             execution_state["approved_actions"] = approved_actions
@@ -240,6 +388,21 @@ class Coordinator():
                                               details=planner_msg.response) 
         
         plan_response = planner_msg.response
+
+        plan_scope_error = self.validate_plan_tool_scope(
+            user_task=user_task,
+            plan_response=plan_response
+        )
+
+        if plan_scope_error:
+            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                              review_summary="Planner produced a plan outside the task scope.",
+                                              issues=[plan_scope_error],
+                                              details={
+                                                "user_task": user_task,
+                                                "plan_response": plan_response
+                                                }
+                                            )
 
         #sending the respective accepted response to the user so that it knows what it will do and user will have to verify  
         execution_state = self.executor.initialise_execution_state(plan_response=plan_response, context=context, recent_messages=k_recent_messages)

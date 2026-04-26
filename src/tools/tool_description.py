@@ -103,24 +103,37 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="create_file",
         description=(
-            "Create a new file inside the workspace sandbox. "
-            "Use this when the user asks to create a new file. "
-            "If the user gives content to put inside the file, place that content in the content argument. "
-            "If the user asks for an empty file, use content as an empty string. "
-            "Never call create_file with only path; create_file always needs both path and content. "
-            "Do not use this to overwrite an existing file. "
+            "Creates a brand-new file inside the workspace sandbox. "
+            "Choose this tool only when the user asks to create a new file that should not already exist. "
+            "The path argument is the new file name or relative path. "
+            "The content argument is always required by the tool, but it may be an empty string. "
+            "If the user says what to put inside the file, use that text as content. "
+            "If the user asks to create a file but does not say what should be inside it, use content=\"\". "
+            "If the content must be generated first, use direct_response first and then use content_step. "
+            "Do not use this tool to overwrite or update an existing file; use write_file for that. "
             "Returns a confirmation string."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative path of the new file inside the workspace.",
+                "description": (
+                    "Relative path of the new file inside the workspace. "
+                    "Example: 'notes.txt' or 'notes/week1.txt'. "
+                    "If the user gives a file name without an extension, infer a reasonable extension only when the user clearly implies one, "
+                    "for example a text file should use '.txt'."
+                ),
                 "step_chainable": False,
                 "required": True
             },
             "content": {
                 "type": "string",
-                "description": "Initial text content to write into the file. Use content_step if content comes from a previous step. Use an empty string if the user wants an empty file.",
+                "description": (
+                    "Initial text content to write into the new file. "
+                    "This argument is required, but it can be an empty string. "
+                    "Use the user's provided text when they specify content. "
+                    "Use an empty string if the user only asks to create the file without specifying content. "
+                    "Use content_step if the content comes from a previous step."
+                ),
                 "step_chainable": True,
                 "required": True
             }

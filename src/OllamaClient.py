@@ -20,7 +20,7 @@ class OllamaClient:
             messages=messages,
             stream=stream,
             options = {
-                "temperature": 0.1 
+                "temperature": 0 
             }
         )
 
@@ -39,7 +39,7 @@ class OllamaClient:
             stream=stream,
             format=schema,
             options = {
-                "temperature": 0.1 #A paramater which controls how strongly the model prefers the most probable next token over the other possible tokens
+                "temperature": 0 #A paramater which controls how strongly the model prefers the most probable next token over the other possible tokens
             }
         )
         return json.loads(response.message.content)
