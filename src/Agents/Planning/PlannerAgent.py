@@ -10,7 +10,7 @@ class PlannerAgent(Agent):
         self.llm_client = llm_client
         super().__init__("planner") #setting the name field for when sending the message
 
-    def build_messages(self,planner_input: dict) -> list[dict]:
+    def build_messages(self, planner_input: dict) -> list[dict]:
         '''
             This method will build the prompt into a list of messages so that it is passed onto the LLM through the messages parameter of ollama's chat method
             which is a list of dictionaries, where it is seperated by roles because it makes the llm understand better hence it improves planning reliability
@@ -23,9 +23,11 @@ class PlannerAgent(Agent):
             }
         ]
 
-        #Seperating the recenent messages underneath their respective role
-        history_messages = [{"role": ("user" if msg["sender"] == "user" else "assistant"), "content": msg["content"]} for msg in planner_input["k_recent_messages"]]
-        messages.extend(history_messages)
+        recent_conversation_text = "\n".join(
+            f"{msg['sender']}: {msg['content']}"
+            for msg in planner_input["k_recent_messages"]
+            if msg.get("sender") in {"user", "assistant"} and msg.get("content")
+        )
 
         messages.append({
                 #Describng what messages being sent by the user are and also any context 
@@ -33,12 +35,23 @@ class PlannerAgent(Agent):
                 #And also defining tools in this respective role because they are part of the current task environment
                 "role": "user",
                 "content": f"""
-                            Task:
+                            Current task to plan:
                             {planner_input["task"]}
+
+                            Important:
+                            Only create a plan for the current task above.
+                            Do not execute, answer, or re-plan old conversation messages.
+                            The recent conversation below is only background context.
+
+                            Recent conversation:
+                            {recent_conversation_text}
+
                             Relevant memory: 
                             {planner_input["context"]}
+
                             Available tools:
                             {planner_input["tools"]}
+
                             Workspace content:
                             {planner_input["workspace_contents"]}
                     """
@@ -53,75 +66,41 @@ class PlannerAgent(Agent):
         if missing_keys:
             raise ValueError(f"Missing planner_input keys: {missing_keys}")
         
-    def build_schema(self, tools: list[dict]) -> dict:
         """
         Builds a dynamic JSON schema based on the available planner tools, this is done so that hallucinated tool names and invalid arguments are prevented
         """
-        tool_variants = []
-
-        for tool in tools:
-            tool_name = tool["name"]
-            args_schema = tool["args_schema"]
-
-            properties = {}
-            required = []
-            one_of_groups = []
-
-            for arg_name, arg_spec in args_schema.items():
-                arg_type = arg_spec["type"]
-                is_chainable = arg_spec.get("step_chainable", False)
-
-                if is_chainable:
-                    step_arg_name = f"{arg_name}_step"
-
-                    properties[arg_name] = {"type": arg_type}
-                    properties[step_arg_name] = {"type": "integer"}
-
-                    one_of_groups.append({
-                        "oneOf": [
-                            {"required": [arg_name]},
-                            {"required": [step_arg_name]}
-                        ]
-                    })
-                else:
-                    properties[arg_name] = {"type": arg_type}
-                    required.append(arg_name)
-
-            args_object_schema = {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": False,
-            }
-
-            if one_of_groups:
-                args_object_schema["allOf"] = one_of_groups
-
-            tool_variants.append({
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer"},
-                    "tool": {
-                        "type": "string",
-                        "enum": [tool_name]
-                    },
-                    "args": args_object_schema
-                },
-                "required": ["id", "tool", "args"],
-                "additionalProperties": False
-            })
+    def build_schema(self, tools: list[dict]) -> dict:
+        tool_names = [tool["name"] for tool in tools]
 
         return {
             "type": "object",
             "properties": {
-                "goal": {"type": "string"},
+                "goal": {
+                    "type": "string"
+                },
                 "steps": {
                     "type": "array",
                     "items": {
-                        "oneOf": tool_variants
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "integer"
+                            },
+                            "tool": {
+                                "type": "string",
+                                "enum": tool_names
+                            },
+                            "args": {
+                                "type": "object"
+                            }
+                        },
+                        "required": ["id", "tool", "args"],
+                        "additionalProperties": False
                     }
                 },
-                "planning_rationale": {"type": "string"}
+                "planning_rationale": {
+                    "type": "string"
+                }
             },
             "required": ["goal", "steps", "planning_rationale"],
             "additionalProperties": False

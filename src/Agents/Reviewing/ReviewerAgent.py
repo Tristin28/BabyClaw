@@ -1,8 +1,10 @@
 from src.Agents.BaseAgent import Agent
 from src.OllamaClient import OllamaClient
 from src.message import Message
+from src.Agents.Reviewing.ReviewPrompt import REVIEWER_SYSTEM_PROMPT
 
 class ReviewerAgent(Agent):
+    REVIEWER_SYSTEM_PROMPT = REVIEWER_SYSTEM_PROMPT
     SCHEMA = {
         "type": "object",
         "properties": {
@@ -63,31 +65,19 @@ class ReviewerAgent(Agent):
         return [
             {
                 "role": "system",
-                "content": """
-                            You are a reviewer agent.
-
-                            Your job is to inspect the executor result and decide whether it satisfactorily fulfills the user's task.
-
-                            Rules:
-                            1. Judge whether the executor result actually addresses the user's task.
-                            2. Accept only if the result is relevant, complete enough for the task, and not clearly incorrect.
-                            3. Reject if the result is missing key parts, irrelevant, malformed, too vague, or clearly inconsistent with the task.
-                            4. Reject results that only look like a valid answer format but do not match the actual subject or intent of the task.
-                            5. A result must be semantically aligned with the task, not just be a short well-formed sentence.
-                            6. Be strict but practical. Minor wording differences are acceptable only if the real task is still fulfilled.
-                            7. Return only valid JSON matching the provided schema.
-                            8. 'accepted' must be true only if the result is genuinely good enough to proceed.
-                            9. 'review_summary' must be short and clear.
-                            10. 'issues' must list concrete problems when rejected, and should be [] when accepted.
-                            """
+                "content": ReviewerAgent.REVIEWER_SYSTEM_PROMPT
             },
             {
                 "role": "user",
                 "content": f"""
-                            User task:
+                            CURRENT USER TASK TO REVIEW:
                             {user_task}
 
-                            Execution results:
+                            Important:
+                            Only judge whether the execution results satisfy the CURRENT USER TASK above.
+                            Do not judge old user messages, recent conversation, memory, or unrelated prior tasks.
+
+                            EXECUTION RESULTS:
                             {execution_trace}
                             """
             }
@@ -100,7 +90,6 @@ class ReviewerAgent(Agent):
             messages = self.build_messages(user_task=user_task, execution_trace=execution_trace)
 
             review_response = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
-
             self.validate_llm_response(review_response)
 
             status = "completed"

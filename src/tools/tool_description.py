@@ -16,7 +16,7 @@ PLANNER_TOOL_DESCRIPTIONS = [
         description=(
             "Read the full contents of a file inside the workspace sandbox. "
             "Use this when the user asks about a specific file or when another step needs the file's text as input. "
-            "Do not use this if the file location is unknown; use list_dir first to locate files or inspect directories. "
+            "Do not use this if the exact file path is unknown; use find_file when the user gives a partial filename, or list_dir only when the user asks to inspect available files. "
             "Use this before summarise_txt when the file must be read before it can be summarised. "
             "The 'path' argument must be the relative path of the file inside the workspace. "
             "Returns: the file contents as a string."
@@ -80,14 +80,15 @@ PLANNER_TOOL_DESCRIPTIONS = [
         name="summarise_txt",
         description=(
             "Summarise text produced by a previous step. "
-            "Use this when the user gives text directly or when a previous step produced text. "
+            "Use this only when the user explicitly asks to summarise, summarize, shorten, explain, or describe text/file contents. "
+            "Do not use this when the user only asks to read, show, open, or view a file. "
             "Use text_step when summarising output from a previous step such as read_file. "
             "Do not pass a file path directly."
         ),
         args_schema={
             "text":{
-                "type": "integer",
-                "description": "ID of a previous step that produced text to summarise",
+                "type": "string",
+                "description": "Text to summarise. Use text_step if the text comes from a previous step.",
                 "step_chainable": True
             }
         },
@@ -170,8 +171,9 @@ PLANNER_TOOL_DESCRIPTIONS = [
         name="direct_response",
         description=(
             "Generate a direct response to the user using the LLM. "
-            "Use this when the user asks for an explanation, email draft, message draft, "
-            "rewrite, answer, or any text that should be shown directly instead of saved to a file. "
+            "Use this for normal chat tasks such as greetings, explanations, email drafts, message drafts, rewrites, or questions. "
+            "Do not use this after read_file just to display file contents. The Coordinator/runner displays read_file results directly. "
+            "Do not use this after summarise_txt just to display the summary. The Coordinator/runner displays summarise_txt results directly. "
             "Do not use this if the user explicitly asks to create, write, append, or overwrite a file."
         ),
         args_schema={

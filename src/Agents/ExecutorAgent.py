@@ -1,7 +1,7 @@
 from src.Agents.BaseAgent import Agent
 from src.message import Message 
 from typing import Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
+#from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class ExecutorAgent(Agent):
     def __init__(self, tool_registry: dict):
@@ -21,6 +21,8 @@ class ExecutorAgent(Agent):
             "step_status": {},
             "execution_trace": [],
             "approved_step_ids": set(), #storing which steps already got permission - in order to fix the bug which was asking permission many times for the same thing
+            "approved_actions": set(),
+            "rollback_log": [],
             "context": context,
             "recent_messages": recent_messages or [] #Depending on whether it is falsy or not
         }
@@ -52,7 +54,9 @@ class ExecutorAgent(Agent):
         return {
             "goal": execution_state["goal"],
             "execution_trace": execution_state["execution_trace"],
-            "step_results": execution_state["step_results"]
+            "step_results": execution_state["step_results"],
+            "approved_actions": list(execution_state.get("approved_actions", set())),
+            "rollback_log": execution_state.get("rollback_log", [])
         }
     
     def validate_result(self, tool_name: str, result: Any):
@@ -63,7 +67,7 @@ class ExecutorAgent(Agent):
         if result is None:
             raise ValueError(f"Tool '{tool_name}' returned None")
 
-        EMPTY_NOT_ALLOWED = {"summarise_txt"} #tools which should not return empty strings
+        EMPTY_NOT_ALLOWED = {"summarise_txt", "direct_response", "list_dir"} #tools which should not return empty strings
         if tool_name in EMPTY_NOT_ALLOWED:
             if not isinstance(result, str) or result.strip() == "":
                 raise ValueError(f"Tool '{tool_name}' returned an empty string")
@@ -78,42 +82,31 @@ class ExecutorAgent(Agent):
 
         execution_trace = execution_state["execution_trace"]
 
-       
-        #Deciding how many threads should be created inside of the thread pool so there is no wastage of resources
-        MAX_THREADS = 8
-        max_workers = max(1, min(len(runnable_steps), MAX_THREADS)) 
+        completed_ids = []
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            #Dict where key = result (of type future) and value would be current step being executed (i.e. value = dict)
-            future_step_result = {executor.submit(self.execute_step,step, execution_state): step for  step in runnable_steps}
+        for step in runnable_steps:
+            try:
+                result = self.execute_step(step, execution_state)
+                self.validate_result(step["tool"], result)
 
-            completed_ids = []
+                step_results[step["id"]] = result
+                step_status[step["id"]] = "completed"
+                completed_ids.append(step["id"])
 
-            for future in as_completed(future_step_result):
-                step = future_step_result[future]
+                execution_trace.append({"id": step["id"], "tool": step["tool"], "args":step.get("args",{}), "depends_on": step.get("depends_on",[]), 
+                                        "status": "completed", "result": result})
 
-                try:
-                    result = future.result()
-                    self.validate_result(step["tool"], result)
+            except Exception as e:
+                step_status[step["id"]] = "failed"
+                execution_trace.append({"id": step["id"], "tool": step["tool"], "args":step.get("args",{}), "depends_on": step.get("depends_on",[]), 
+                                        "status": "failed", "error": str(e)})
+                
+                #propogating the error upward into the stack frames which will be handled by the run method however, it has to be directed accordingly in coord
+                raise RuntimeError(f"Step {step['id']} failed: {e}") from e
 
-                    step_results[step["id"]] = result
-                    step_status[step["id"]] = "completed"
-                    completed_ids.append(step["id"])
+        #Removing the steps which are completed
+        execution_state["remaining_steps"] = [step for step in execution_state["remaining_steps"] if step["id"] not in completed_ids] 
 
-                    execution_trace.append({"id": step["id"], "tool": step["tool"], "args":step.get("args",{}), "depends_on": step.get("depends_on",[]), 
-                                            "status": "completed", "result": result})
-
-                except Exception as e:
-                    step_status[step["id"]] = "failed"
-                    execution_trace.append({"id": step["id"], "tool": step["tool"], "args":step.get("args",{}), "depends_on": step.get("depends_on",[]), 
-                                            "status": "failed", "error": str(e)})
-                    
-                    #propogating the error upward into the stack frames which will be handled by the run method however, it has to be directed accordingly in coord
-                    raise RuntimeError(f"Step {step['id']} failed: {e}") from e
-
-            #Removing the steps which are completed
-            execution_state["remaining_steps"] = [step for step in execution_state["remaining_steps"] if step["id"] not in completed_ids] 
-         
         return execution_state
 
     def execute_step(self, plan_output_step: dict, execution_state: dict) -> Any:
@@ -128,7 +121,23 @@ class ExecutorAgent(Agent):
 
         resolved_args = self.resolve_args(plan_output_step=plan_output_step, execution_state=execution_state, input_map=input_map) 
 
+        snapshot = None
+        rollback_snapshot_fn = tool_def.get("rollback_snapshot")
+
+        #Taking the rollback snapshot before the tool runs, because this stores the old file state before it gets modified
+        if rollback_snapshot_fn:
+            snapshot = rollback_snapshot_fn(**resolved_args)
+        
         result = tool_fn(**resolved_args)
+
+        if rollback_snapshot_fn:
+            execution_state.setdefault("rollback_log", []).append({
+                "step_id": plan_output_step["id"],
+                "tool": tool_name,
+                "resolved_args": resolved_args,
+                "snapshot": snapshot
+            })
+
         return result
     
     def resolve_args(self, plan_output_step: dict, execution_state: dict, input_map: dict) -> dict: 
@@ -170,6 +179,24 @@ class ExecutorAgent(Agent):
             resolved_args["recent_messages"] = execution_state.get("recent_messages", [])
 
         return resolved_args
+    
+    def resolve_step_args_for_permission(self, step: dict, execution_state: dict) -> dict:
+        '''
+            It is small wrapper method which is used by Coordinator before permission checking
+        '''
+        tool_name = step["tool"]
+
+        if tool_name not in self.tool_registry:
+            raise ValueError(f"Unknown tool {tool_name}")
+
+        tool_def = self.tool_registry[tool_name]
+        input_map = tool_def["input_map"]
+
+        return self.resolve_args(
+            plan_output_step=step,
+            execution_state=execution_state,
+            input_map=input_map
+        )
 
     def run_set_tools(self, conversation_id: int, step_index: int, execution_state: dict, runnable_steps: list[dict]) -> Message:
         '''

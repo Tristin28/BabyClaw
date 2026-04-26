@@ -15,16 +15,16 @@ class WorkspaceConfig:
 
         self.root = new_path
 
-def resolve_workspace_path(workspace: WorkspaceConfig, relative_path: str,) -> Path:
-    """
-        Method is used to resolve a safe absolute path inside the workspace directory
-        i.e. it grabs the path the system gives (can be combined either with subdirectories inside workspace or just the respective files)
-        then it combines them with the respective absolute path of the workspace folder
-    """
+    def resolve_workspace_path(self,relative_path: str,) -> Path:
+        """
+            Method is used to resolve a safe absolute path inside the workspace directory
+            i.e. it grabs the path the system gives (can be combined either with subdirectories inside workspace or just the respective files)
+            then it combines them with the respective absolute path of the workspace folder
+        """
 
-    resolved_path = (workspace.root / relative_path).resolve()
+        resolved_path = (self.root / relative_path).resolve()
 
-    if not resolved_path.is_relative_to(workspace.root):
-        raise PermissionError("Access outside workspace is not allowed")
+        if not resolved_path.is_relative_to(self.root):
+            raise PermissionError("Access outside workspace is not allowed")
 
-    return resolved_path
+        return resolved_path

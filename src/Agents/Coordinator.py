@@ -1,10 +1,10 @@
 from src.Agents.Planning.PlannerAgent import PlannerAgent
 from src.Agents.ExecutorAgent import ExecutorAgent
 from src.Agents.MemoryAgent import MemoryAgent
-from src.Agents.ReviewerAgent import ReviewerAgent
+from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
 from src.message import Message
 from src.OllamaClient import OllamaClient
-from src.tools.file_tools import list_dir
+import json
 
 
 '''
@@ -56,8 +56,9 @@ class Coordinator():
                 if "Unknown tool" in error:
                     return planner_msg   #stop immediately
                 
+                #Giving the replanning some feedback to what made the plan fail
                 planner_input["context"] += f"""
-                    Previous planning attempt failed.
+                    Previous planning attempt failed. 
 
                     Compiler error:
                     {error}
@@ -82,7 +83,8 @@ class Coordinator():
                     """
             return planner_msg  #failed after retries
     
-    def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict, executor_response: dict,reviewer_response: dict) -> Message:
+    def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict, 
+                                      executor_response: dict,reviewer_response: dict, approved_actions: set) -> Message:
         '''
             This method is called when reviewer rejects the execution result. It gives the planner the reviewer issues so it can create a better plan.
         '''
@@ -95,7 +97,7 @@ class Coordinator():
         }
 
         context = self.memory.get_relevant_memory(task=user_task, k=5)
-        k_recent_messages = self.memory.get_recent_messages(conversation_id=conversation_id, k=5)
+        k_recent_messages = self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
 
         planner_input = self.build_planner_input(user_task=str(revised_task), context=context, k_recent_messages=k_recent_messages,
                                                 conversation_id=conversation_id, step_index=self.PLANNER_STEP)
@@ -104,23 +106,38 @@ class Coordinator():
         if planner_msg.status == "failed":
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP, 
                                               review_summary="Replanning failed after reviewer rejected the result.", 
-                                              issues=[planner_msg.response.get("error", "Unknown replanning error.")]
+                                              issues=[planner_msg.response.get("error", "Unknown replanning error.")],
+                                              execution_response=executor_response, error=planner_msg.response.get("error", "Unknown replanning error."),
+                                              details=planner_msg.response
                                               )
 
 
         new_plan_response = planner_msg.response
-        execution_state = self.executor.initialise_execution_state(plan_response=plan_response, context=context, recent_messages=k_recent_messages)
+        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response, context=context, recent_messages=k_recent_messages)
+        if approved_actions:
+            execution_state["approved_actions"] = approved_actions
 
         executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state, start_step_index=self.EXECUTOR_STEP,
                                                user_task=user_task, plan_response=new_plan_response)
 
-        if executor_msg.status == "waiting" or executor_msg.status == "failed":
+        if executor_msg.status == "waiting":
             return executor_msg
+        
+        if executor_msg.status == "failed":
+            execution_state = executor_msg.response.get("execution_state", {})
+            rollback_results = self.rollback_execution(executor_response=execution_state)
 
-        return self.continue_workflow(conversation_id=conversation_id, user_task=user_task, plan_response=new_plan_response,
-                                    executor_msg=executor_msg, step_index=self.REVIEWER_STEP, review_retry_used=True)
+            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                              review_summary="Execution failed during replanning.",
+                                              issues=[executor_msg.response.get("error", "Unknown execution error.")],
+                                              execution_response=execution_state,
+                                              rollback_results=rollback_results,
+                                              error=executor_msg.response.get("error", "Unknown execution error."),
+                                              details=executor_msg.response)
+
+        return self.continue_workflow(conversation_id=conversation_id, user_task=user_task, plan_response=new_plan_response, executor_msg=executor_msg, 
+                                      review_retry_used=True)
     
-
     '''
         Messages sent to the runner file in order for the response field to be sent to the user in order for it to know what happened with its task
     '''
@@ -128,19 +145,66 @@ class Coordinator():
         trace = execution_response.get("execution_trace", [])
         trace = sorted(trace, key=lambda step: step["id"])
 
+        direct_outputs = [step.get("result") for step in trace if step.get("tool") == "direct_response" and step.get("status") == "completed" and step.get("result")]
+
+        display_outputs = [step.get("result") for step in trace if step.get("tool") in {"read_file", "summarise_txt"} and 
+                           step.get("status") == "completed" and step.get("result")]
+
+        display_result = direct_outputs[-1] if direct_outputs else (display_outputs[-1] if display_outputs else None)
+
+        if direct_outputs:
+            self.memory.store_message(Message(conversation_id=conversation_id, step_index=step_index, sender="assistant", receiver="user", 
+                                            target_agent=None, message_type="assistant_message", status="completed", 
+                                            response={"content": direct_outputs[-1]}, visibility="external"
+                                            )
+                                    )
+
         message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, 
-                           message_type="workflow_result", status="completed",
-                           response={"message": "Task completed successfully.", "review_summary": review_summary, "execution_trace": trace}, 
-                           visibility="external")
+                        message_type="workflow_result", status="completed",
+                        response={
+                                "message": "Task completed successfully.",
+                                "review_summary": review_summary,
+                                "execution_trace": trace,
+                                "step_results": execution_response.get("step_results", {}),
+                                "approved_actions": execution_response.get("approved_actions", []),
+                                "rollback_log": execution_response.get("rollback_log", []),
+                                "direct_response": direct_outputs[-1] if direct_outputs else None,
+                                "display_result": display_result
+                            },
+                        visibility="external")
         
         self.memory.store_message(message)
 
         return message
 
-    def build_failure_message(self, conversation_id: int, step_index: int, review_summary: str, issues: list[str]) -> Message:
-        message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, message_type="workflow_result",
-                           status="failed", response={"message": "Task could not be completed successfully.", "review_summary": review_summary, "issues": issues}
-                           ,visibility="external")
+    def build_failure_message(self, conversation_id: int, step_index: int, review_summary: str, issues: list[str],
+                              execution_response: dict = None, rollback_results: list[dict] = None,
+                              error: str = None, details: dict = None) -> Message:
+        
+        execution_response = execution_response or {}
+
+        trace = execution_response.get("execution_trace", [])
+        trace = sorted(trace, key=lambda step: step["id"]) if trace else []
+
+        response = {
+            "message": "Task could not be completed successfully.",
+            "review_summary": review_summary,
+            "issues": issues,
+            "execution_trace": trace,
+            "step_results": execution_response.get("step_results", {}),
+            "approved_actions": execution_response.get("approved_actions", []),
+            "rollback_log": execution_response.get("rollback_log", []),
+            "rollback_results": rollback_results or []
+        }
+
+        if error:
+            response["error"] = error
+
+        if details:
+            response["details"] = details
+
+        message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, 
+                          message_type="workflow_result", status="failed", response=response, visibility="external")
         
         self.memory.store_message(message)
 
@@ -152,9 +216,13 @@ class Coordinator():
             Main method which will be called by the client code, as it is going to handle the entire system, i.e. core workflow logic
             Note conv_id will be retrieved by the main entry point where the text sent by user is being handled
         '''
+        user_message = Message(conversation_id=conversation_id, step_index=0, sender="user", receiver="coordinator", target_agent=None, message_type="user_message",
+                               status="completed", response={"content": user_task}, visibility="external")
+        self.memory.store_message(message=user_message)
         
+
         context = self.memory.get_relevant_memory(task=user_task, k=5)
-        k_recent_messages = self.memory.get_recent_messages(conversation_id=conversation_id, k=5)
+        k_recent_messages = self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
 
         planner_input = self.build_planner_input(user_task = user_task, context = context, k_recent_messages = k_recent_messages, 
                                                  conversation_id = conversation_id, step_index = self.PLANNER_STEP)
@@ -163,7 +231,10 @@ class Coordinator():
         planner_msg = self.try_plan(planner_input=planner_input)
 
         if planner_msg.status == 'failed' and planner_msg.target_agent is None:
-            return self.build_failure_message(conversation_id=conversation_id,step_index=self.FINAL_STEP,review_summary=planner_msg.response.get("error"), issues=[]) 
+            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                              review_summary="Planning failed.",issues=[planner_msg.response.get("error", "Unknown planning error.")],
+                                              error=planner_msg.response.get("error", "Unknown planning error."),
+                                              details=planner_msg.response) 
         
         plan_response = planner_msg.response
 
@@ -172,14 +243,24 @@ class Coordinator():
         executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state, start_step_index=self.EXECUTOR_STEP, 
                                        user_task=user_task, plan_response=plan_response)
 
-        if executor_msg.status=="failed" or executor_msg.status == "waiting":
+        if executor_msg.status == "waiting":
             return executor_msg #routing the respective message back to the runner method
         
-        return self.continue_workflow(conversation_id=conversation_id, user_task=user_task,plan_response=plan_response, executor_msg=executor_msg, step_index=self.REVIEWER_STEP,
+        if executor_msg.status == "failed":
+            execution_state = executor_msg.response.get("execution_state", {})
+            rollback_results = self.rollback_execution(executor_response=execution_state)
+
+            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                              review_summary="Execution failed before review.",
+                                              issues=[executor_msg.response.get("error", "Unknown execution error.")],
+                                              execution_response=execution_state, rollback_results=rollback_results,
+                                              error=executor_msg.response.get("error", "Unknown execution error."),
+                                              details=executor_msg.response)
+        
+        return self.continue_workflow(conversation_id=conversation_id, user_task=user_task,plan_response=plan_response, executor_msg=executor_msg,
                                       review_retry_used=False)
     
-    def continue_workflow(self, conversation_id: int, user_task: str, plan_response: dict, executor_msg: Message, 
-                          step_index: int, review_retry_used: bool) -> Message:
+    def continue_workflow(self, conversation_id: int, user_task: str, plan_response: dict, executor_msg: Message, review_retry_used: bool) -> Message:
         '''
             This method is handling the respective logic which happens after permission is accepted (if needed), so that the user is kept in the loop while
             also not having redundant lines of code in the coordinator
@@ -187,6 +268,9 @@ class Coordinator():
 
         executor_response = executor_msg.response #will only contain messages with .status == "completed"
         
+        print("[DEBUG reviewer user_task]:", user_task)
+        print("[DEBUG reviewer executor_response]:", executor_response)
+
         reviewer_msg = self.reviewer.run(conversation_id=conversation_id,step_index=self.REVIEWER_STEP, user_task = user_task, execution_trace = executor_response)
         self.memory.store_message(message=reviewer_msg)
 
@@ -194,18 +278,22 @@ class Coordinator():
         accepted = reviewer_msg.response.get("accepted", False)
 
         if not accepted:
+            rollback_results = self.rollback_execution(executor_response=executor_response)
+            issues = reviewer_response.get("issues", [])
             self.memory.store_message(message=Message(conversation_id=reviewer_msg.conversation_id, step_index=reviewer_msg.step_index, 
                                                     sender="memory", receiver="coordinator", target_agent=None, message_type="memory_store", 
                                                     status="completed", response={"stored": False, "reason": "Reviewer did not accept workflow"},
                                                     visibility="internal"))
-
+            '''
             if not review_retry_used:
+                approved_actions = set(executor_response.get("approved_actions", []))
                 return self.replan_after_review_rejection(conversation_id=conversation_id, user_task=user_task, plan_response=plan_response,
-                                                        executor_response=executor_response, reviewer_response=reviewer_response)
-
+                                                        executor_response=executor_response, reviewer_response=reviewer_response, approved_actions=approved_actions)
+            '''
+            
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP, 
                                             review_summary=reviewer_response.get("review_summary", "Reviewer rejected execution."),
-                                            issues=reviewer_response.get("issues", []))
+                                            issues=issues,execution_response=executor_response, rollback_results=rollback_results, details=reviewer_response)
         
         episode_summary = self.create_epsiodic_summary(user_task=user_task, planner_response=plan_response,
                                                        executor_response=executor_response, reviewer_response= reviewer_response)
@@ -233,13 +321,12 @@ class Coordinator():
 
             if not runnable_steps:
                 #since while loop is confirming that the execution is not yet completete then runnable_steps has to be with some respective steps, hence if it is empty -> failure
-                message = Message(conversation_id=conversation_id, step_index=start_step_index, sender="coordinator", receiver="user", target_agent=None, 
-                               message_type="execution_failed",status="failed", 
-                               response={"message": "Execution blocked: no runnable steps found."}, visibility="external")
-                
-                self.memory.store_message(message)
-
-                return message
+                return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                                  review_summary="Execution blocked: no runnable steps found.",
+                                                  issues=["Execution is not complete, but no runnable steps are available."],
+                                                  execution_response=execution_state,
+                                                  error="Execution blocked: no runnable steps found.",
+                                                  details=execution_state)
 
             permission_steps = self.get_permission_required_steps(runnable_steps,execution_state=execution_state)
 
@@ -277,8 +364,26 @@ class Coordinator():
             self.memory.store_message(message)
             return message
         
+        approved_action_signatures = []
+
+        for step in pending_runnable_steps:
+            if not self.tool_registry.get(step["tool"], {}).get("requires_permission", False):
+                continue
+
+            resolved_args = self.executor.resolve_step_args_for_permission(
+                step=step,
+                execution_state=execution_state
+            )
+
+            approved_action_signatures.append(
+                self.permission_signature(step, resolved_args)
+            )
+
         execution_state["approved_step_ids"].update(step["id"] for step in pending_runnable_steps 
-                                                    if self.tool_registry.get(step["tool"], {}).get("requires_permission", False))
+                                                    if self.tool_registry.get(step["tool"], {}).get("requires_permission", False)
+                                                    )
+
+        execution_state.setdefault("approved_actions", set()).update(approved_action_signatures)
 
         #executing the exact runnable wave which was already shown to the user and approved
         executor_msg = self.executor.run_set_tools(conversation_id=conversation_id, step_index=step_index, execution_state=execution_state, 
@@ -288,11 +393,20 @@ class Coordinator():
         #if execution finished right after the approved wave then continue to reviewer/memory/final response
         if executor_msg.message_type == "execution_result":
             return self.continue_workflow(conversation_id=conversation_id, user_task=user_task, plan_response=plan_response, 
-                                          executor_msg=executor_msg, step_index=self.REVIEWER_STEP, review_retry_used=False)
+                              executor_msg=executor_msg, review_retry_used=False)
         
         #Handling the case that if when the set of permitted runnable tools fail when executing it stops
         if executor_msg.status == "failed":
-            return executor_msg
+            execution_state = executor_msg.response.get("execution_state", {})
+            rollback_results = self.rollback_execution(executor_response=execution_state)
+
+            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                              review_summary="Execution failed after permission was approved.",
+                                              issues=[executor_msg.response.get("error", "Unknown execution error.")],
+                                              execution_response=execution_state,
+                                              rollback_results=rollback_results,
+                                              error=executor_msg.response.get("error", "Unknown execution error."),
+                                              details=executor_msg.response)
 
         #if the approved wave completed but there are still remaining steps then continue the execution loop normally
         if executor_msg.message_type == "execution_wave_result":
@@ -301,35 +415,83 @@ class Coordinator():
             next_executor_msg = self.run_execution_loop(conversation_id=conversation_id, user_task=user_task, plan_response=plan_response, 
                                                         execution_state=updated_execution_state, start_step_index=step_index)
 
-            if next_executor_msg.status == "waiting" or next_executor_msg.status=="failed":
+            if next_executor_msg.status == "waiting":
                 return next_executor_msg #will re-rout the respective permission request back to user again
+            
+            if next_executor_msg.status=="failed":
+                execution_state = next_executor_msg.response.get("execution_state", {})
+                rollback_results = self.rollback_execution(executor_response=execution_state)
+
+                return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                                  review_summary="Execution failed while continuing after permission.",
+                                                  issues=[next_executor_msg.response.get("error", "Unknown execution error.")],
+                                                  execution_response=execution_state, rollback_results=rollback_results,
+                                                  error=next_executor_msg.response.get("error", "Unknown execution error."),
+                                                  details=next_executor_msg.response)
 
             return self.continue_workflow(conversation_id=conversation_id, user_task=user_task, plan_response=plan_response, 
-                                          executor_msg=next_executor_msg, step_index=self.REVIEWER_STEP, review_retry_used=False)
+                                          executor_msg=next_executor_msg, review_retry_used=False)
         
         #Fall back return statement if something unexpected breaks inside the workflow
-        message = Message(conversation_id=conversation_id, step_index=step_index, sender="coordinator", receiver="user", target_agent=None, message_type="workflow_result",
-                       status="failed",response={"message": "Unexpected breakage in the workflow", "details": executor_msg.response}, visibility="external")
-        
-        self.memory.store_message(message)
-        return message
+        return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                          review_summary="Unexpected breakage in the workflow.",
+                                          issues=["The executor returned an unexpected message type."],
+                                          error="Unexpected breakage in the workflow.",
+                                          details=executor_msg.response)
     
-    '''
-        Helper functions for the respective permission steps
-    '''
+    
+    def permission_signature(self, step: dict, resolved_args: dict) -> str:
+        tool_name = step["tool"]
+
+        tool_def = self.tool_registry.get(tool_name, {})
+        identity_args = tool_def.get("permission_identity_args") or []
+
+        if identity_args:
+            identity = {
+                arg_name: resolved_args.get(arg_name)
+                for arg_name in identity_args
+            }
+        else:
+            identity = resolved_args
+
+        return json.dumps(
+            {
+                "tool": tool_name,
+                "identity": identity
+            },
+            sort_keys=True
+        )
+    
     def get_permission_required_steps(self, runnable_steps: list[dict], execution_state: dict) -> list[dict]:
-            permission_steps = []
+        permission_steps = []
 
-            approved_ids = execution_state.get("approved_step_ids", set())
-            for step in runnable_steps:
-                tool_name = step["tool"]
-                tool_def = self.tool_registry.get(tool_name, {})
+        approved_ids = execution_state.get("approved_step_ids", set())
+        approved_actions = execution_state.get("approved_actions", set())
 
-                if tool_def.get("requires_permission", False) and step["id"] not in approved_ids:
-                    permission_steps.append(step)
+        for step in runnable_steps:
+            tool_name = step["tool"]
+            tool_def = self.tool_registry.get(tool_name, {})
 
-            return permission_steps #represents another sublist but this time of the respective list which contains the steps that are currently available to be executed
-        
+            if not tool_def.get("requires_permission", False):
+                continue
+
+            if step["id"] in approved_ids:
+                continue
+
+            resolved_args = self.executor.resolve_step_args_for_permission(
+                step=step,
+                execution_state=execution_state
+            )
+
+            signature = self.permission_signature(step, resolved_args)
+
+            if signature in approved_actions:
+                continue
+
+            permission_steps.append(step)
+
+        return permission_steps #represents another sublist but this time of the respective list which contains the steps that are currently available to be executed
+    
     def build_permission_request_message(self, conversation_id: int, step_index: int, user_task: str, plan_response: dict, permission_steps: list[dict], 
                                         execution_state: dict, pending_runnable_steps: list[dict]) -> Message:
         requested_tools = []
@@ -374,11 +536,14 @@ class Coordinator():
             {
                 "role": "system",
                 "content": (
-                    "You are a summarisation agent. "
                     "Given a completed workflow, produce a short factual summary "
                     "describing: what the user asked for, what the plan's goal was, "
                     "what tools were executed and what they produced, and what the "
                     "reviewer concluded. "
+                    "Also identify whether the user revealed any stable personal fact, "
+                    "preference, project detail, tool preference, learning goal, or reusable task lesson. "
+                    "If the user revealed a stable fact or preference, state it clearly in the summary. "
+                    "Do not invent facts. "
                     "Be concise (2-4 sentences). Do not add opinions or speculation. "
                 ),
             },
@@ -419,7 +584,9 @@ class Coordinator():
             "folder",
             "directory",
             "workspace",
-            "read",
+            "read file",
+            "read the file",
+            "read a file",
             "create",
             "write to",
             "save",
@@ -430,7 +597,8 @@ class Coordinator():
             "list",
             "find file",
             "summarise file",
-            "summarize file",
+            "summarize the file",
+            "summarise a file"
         ]
 
         file_extensions = [
@@ -450,3 +618,33 @@ class Coordinator():
             return True
 
         return False
+    
+    def rollback_execution(self, executor_response: dict) -> list[dict]:
+        rollback_results = []
+
+        rollback_log = executor_response.get("rollback_log", [])
+
+        for entry in reversed(rollback_log):
+            tool_name = entry["tool"]
+            tool_def = self.tool_registry.get(tool_name, {})
+            rollback_apply = tool_def.get("rollback_apply")
+
+            if not rollback_apply:
+                continue
+
+            try:
+                rollback_apply(entry["snapshot"])
+                rollback_results.append({
+                    "step_id": entry["step_id"],
+                    "tool": tool_name,
+                    "status": "rolled_back"
+                })
+            except Exception as e:
+                rollback_results.append({
+                    "step_id": entry["step_id"],
+                    "tool": tool_name,
+                    "status": "rollback_failed",
+                    "error": str(e)
+                })
+
+        return rollback_results

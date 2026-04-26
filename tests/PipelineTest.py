@@ -10,7 +10,7 @@ This runner:
 from src.Agents.Planning.PlannerAgent import PlannerAgent
 from src.Agents.ExecutorAgent import ExecutorAgent
 from src.Agents.MemoryAgent import MemoryAgent
-from src.Agents.ReviewerAgent import ReviewerAgent
+from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
 from src.Agents.Coordinator import Coordinator
 from src.OllamaClient import OllamaClient
 from src.Memory.sql_database import DatabaseManager
@@ -26,6 +26,47 @@ def print_indent(value, indent: str = "    "):
 
     for line in text.splitlines():
         print(f"{indent}{line}")
+
+def print_section(title: str):
+    print()
+    print(title)
+
+
+def render_key_value(title: str, value):
+    if value is None:
+        return
+
+    print(f"\n{title}:")
+    print_indent(value)
+
+
+def render_debug_list(title: str, values):
+    print_section(title)
+
+    if not values:
+        print("None")
+        return
+
+    for value in values:
+        print(f"- {value}")
+
+
+def render_display_result(response: dict):
+    display_result = response.get("display_result")
+    direct_response = response.get("direct_response")
+
+    if display_result:
+        print_section("DISPLAY RESULT SHOWN TO USER")
+        print_indent(display_result)
+        return
+
+    if direct_response:
+        print_section("DIRECT RESPONSE")
+        print_indent(direct_response)
+        return
+
+    print_section("DISPLAY RESULT SHOWN TO USER")
+    print("None")
 
 
 def render_plan(plan_response: dict):
@@ -49,11 +90,11 @@ def render_plan(plan_response: dict):
 
 
 def render_execution_trace(trace: list[dict]):
-    if not trace:
-        print("\nExecution trace: None")
-        return
+    print_section("EXECUTION TRACE")
 
-    print("\nExecution trace:")
+    if not trace:
+        print("None")
+        return
 
     for step in trace:
         step_id = step.get("id", "?")
@@ -72,23 +113,83 @@ def render_execution_trace(trace: list[dict]):
 
         if "result" in step:
             print("  Result:")
-            print_indent(step["result"])
+            print_indent(step["result"], indent="    ")
 
         if "error" in step:
             print("  Error:")
-            print_indent(step["error"])
+            print_indent(step["error"], indent="    ")
+
+def render_rollback_log(rollback_log: list[dict]):
+    print_section("ROLLBACK LOG")
+
+    if not rollback_log:
+        print("None")
+        return
+
+    for entry in rollback_log:
+        print(f"\nStep {entry.get('step_id')}")
+        print(f"  Tool: {entry.get('tool')}")
+        print(f"  Resolved args: {entry.get('resolved_args')}")
+        print(f"  Snapshot:")
+        print_indent(entry.get("snapshot"))
+
+
+def render_rollback_results(rollback_results):
+    print_section("ROLLBACK RESULTS")
+
+    if not rollback_results:
+        print("None")
+        return
+
+    for result in rollback_results:
+        print(f"- Step {result.get('step_id')} | Tool: {result.get('tool')} | Status: {result.get('status')}")
+
+        if "error" in result:
+            print("  Error:")
+            print_indent(result["error"])
+
+
+def render_approved_actions(approved_actions):
+    print_section("APPROVED ACTIONS")
+
+    if not approved_actions:
+        print("None")
+        return
+
+    for action in approved_actions:
+        print(f"- {action}")
+
+
+def render_step_results(step_results):
+    print_section("STEP RESULTS")
+
+    if not step_results:
+        print("None")
+        return
+
+    for step_id, result in step_results.items():
+        print(f"\nStep {step_id}:")
+        print_indent(result)
 
 
 def render_message(msg: Message):
     print()
-    print("=" * 70)
 
     response = msg.response or {}
 
-    if msg.message_type == "permission_request":
-        print("System: Permission is required before continuing.\n")
+    print("MESSAGE DEBUG")
+    print(f"Status: {msg.status}")
+    print(f"Message type: {msg.message_type}")
+    print(f"Sender: {msg.sender}")
+    print(f"Receiver: {msg.receiver}")
+    print(f"Target agent: {msg.target_agent}")
+    print(f"Response keys: {list(response.keys())}")
 
-        print("Requested tools:")
+    if msg.message_type == "permission_request":
+        print_section("PERMISSION REQUEST")
+        print("System: Permission is required before continuing.")
+
+        print_section("REQUESTED TOOLS")
         for tool in response.get("requested_tools", []):
             print(f"- Step {tool.get('step_id')} | Tool: {tool.get('tool')}")
             print(f"  Args: {tool.get('args')}")
@@ -96,35 +197,73 @@ def render_message(msg: Message):
 
         render_plan(response.get("plan_response", {}))
 
-        print("\nReply with 'yes' to approve or 'no' to cancel.")
-        print("=" * 70)
+        execution_state = response.get("execution_state", {})
+        render_execution_trace(execution_state.get("execution_trace", []))
+        render_approved_actions(execution_state.get("approved_actions", []))
+        render_rollback_log(execution_state.get("rollback_log", []))
+
+        print_section("NEXT ACTION")
+        print("Reply with 'yes' to approve or 'no' to cancel.")
         return
 
     if msg.status == "failed":
-        print("System: Task failed.\n")
+        print_section("FINAL STATUS")
+        print("System: Task failed.")
 
-        if "message" in response:
-            print(f"Message: {response['message']}")
-
-        if "error" in response:
-            print(f"Reason: {response['error']}")
-
-        if "review_summary" in response:
-            print(f"Review: {response['review_summary']}")
+        render_key_value("Message", response.get("message"))
+        render_key_value("Reason", response.get("error"))
+        render_key_value("Review", response.get("review_summary"))
 
         issues = response.get("issues", [])
         if issues:
-            print("\nIssues:")
+            print_section("ISSUES")
             for issue in issues:
                 print(f"- {issue}")
+
+        render_display_result(response)
 
         execution_state = response.get("execution_state")
         if execution_state:
             render_execution_trace(execution_state.get("execution_trace", []))
+            render_step_results(execution_state.get("step_results", {}))
+            render_approved_actions(execution_state.get("approved_actions", []))
+            render_rollback_log(execution_state.get("rollback_log", []))
+
+        render_rollback_results(response.get("rollback_results", []))
+
+        return
+
+    if msg.status == "cancelled":
+        print_section("FINAL STATUS")
+        print(f"System: {response.get('message', 'Task cancelled.')}")
+        print("=" * 70)
+        return
+
+    if msg.status == "completed":
+        print_section("FINAL STATUS")
+        print(f"System: {response.get('message', 'Task completed successfully.')}")
+
+        render_display_result(response)
+
+        if "review_summary" in response:
+            render_key_value("Review", response["review_summary"])
+
+        render_plan(response.get("plan_response", {}))
+        render_execution_trace(response.get("execution_trace", []))
+        render_step_results(response.get("step_results", {}))
+        render_approved_actions(response.get("approved_actions", []))
+        render_rollback_log(response.get("rollback_log", []))
+        render_rollback_results(response.get("rollback_results", []))
 
         print("=" * 70)
         return
 
+    print_section("RAW RESPONSE")
+    print("System: Received response.")
+    print(response)
+    print("=" * 70)
+
+    
     if msg.status == "cancelled":
         print(f"System: {response.get('message', 'Task cancelled.')}")
         print("=" * 70)

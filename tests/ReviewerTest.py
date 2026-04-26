@@ -1,4 +1,4 @@
-from src.Agents.ReviewerAgent import ReviewerAgent
+from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
 from src.OllamaClient import OllamaClient
 
 llm_client = OllamaClient(model="qwen2.5:3b")

@@ -56,8 +56,38 @@ class MemoryAgent(Agent):
     def get_recent_messages(self, conversation_id: int, k: int)-> list[dict]:
         '''
             Method will use the MessageRepositry instance's behaviour in order to query some relational db in order to recieve the respective k last messages
+            between the entire components (agents + user) of the system
         '''
         return self.sql_repo.get_recent_messages(conversation_id=conversation_id,k=k)
+    
+    def get_recent_conversation_messages(self,conversation_id: int, k: int = 5):
+        '''
+            Method which will filter out the respective k recent messages so that only the external visible messages are retrieved for context for the llm's to 
+            reason about.
+        '''
+        messages = self.get_recent_messages(conversation_id=conversation_id, k=50)
+
+        clean_messages = []
+
+        for msg in messages:
+            if msg.get("visibility") != "external":
+                continue
+
+            if msg.get("sender") not in {"user", "assistant"}:
+                continue
+
+            if msg.get("message_type") not in {"user_message", "assistant_message"}:
+                continue
+
+            content = msg.get("content", "")
+
+            if content:
+                clean_messages.append({
+                    "sender": msg["sender"],
+                    "content": content
+                })
+
+        return clean_messages[-k:]
     
     def store_message(self, message: Message) -> Message:
         '''
@@ -176,6 +206,17 @@ class MemoryAgent(Agent):
                                 6. Prefer stable and reusable memories over temporary details.
                                 7. A task_lesson must describe a lesson that can help with future similar tasks, not just describe what happened here.
                                 8. Do not store system facts just because they appeared in the planner, executor, or reviewer outputs.
+
+                                Important:
+                                The raw user task is the most important source for user facts and preferences.
+
+                                If the user explicitly states a stable fact about themselves, their project, their tools, their goals, or their preferences, store it.
+
+                                Examples:
+                                - "my name is Tristin" -> user_fact, topic=user_name
+                                - "I am building BabyClaw" -> user_fact, topic=current_project
+                                - "I prefer short explanations" -> user_preference, topic=explanation_style
+                                - "I use Ollama with qwen2.5:3b" -> user_fact, topic=tools_used
                                 """
                 },
                 {

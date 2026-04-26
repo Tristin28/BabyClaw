@@ -1,11 +1,16 @@
 from typing import Any, Callable
 from src.OllamaClient import OllamaClient
-from src.tools.file_tools import read_file, list_dir, find_file, create_file, write_file, append_file
+from src.tools.file_tools import read_file, list_dir, find_file, create_file, write_file, append_file, rollback_file_snapshot, snapshot_file
 from src.tools.llm_tools import create_summarise_txt_func, direct_response
 from src.tools.utils import WorkspaceConfig
 
-def make_tool_registry_entry(func: Callable[..., Any], description: str, input_map: dict[str, str], requires_permission: bool) -> dict[str, Any]:
-    return {"func": func, "description": description, "input_map": input_map, "requires_permission": requires_permission}
+def make_tool_registry_entry(func: Callable[..., Any], description: str, input_map: dict[str, str], requires_permission: bool, 
+                             permission_identity_args: list[str] = None,rollback_snapshot: Callable[..., Any] = None, 
+                             rollback_apply: Callable[..., Any] = None
+                             ) -> dict[str, Any]:
+    
+    return {"func": func, "description": description, "input_map": input_map, "requires_permission": requires_permission, 
+            "permission_identity_args": permission_identity_args or [], "rollback_snapshot": rollback_snapshot, "rollback_apply": rollback_apply}
 
 
 def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) -> dict[str, dict[str, Any]]:
@@ -22,7 +27,7 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
             input_map={
                 "path": "path",
             },
-            requires_permission=False
+            requires_permission=False,
         ),
 
         "list_dir": make_tool_registry_entry(
@@ -31,7 +36,7 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
             input_map={
                 "path": "path",
             },
-            requires_permission=False
+            requires_permission=False,
         ),
 
         "find_file": make_tool_registry_entry(
@@ -50,7 +55,7 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
             input_map={
                 "text": "text",
             },
-            requires_permission=False
+            requires_permission=False,
         ),
 
         "create_file": make_tool_registry_entry(
@@ -60,7 +65,10 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
             "path": "path",
             "content": "content"
         },
-        requires_permission=True
+        requires_permission=True,
+        permission_identity_args=["path", "content"],
+        rollback_snapshot=lambda path, content="": snapshot_file(workspace, path),
+        rollback_apply=lambda snapshot: rollback_file_snapshot(workspace, snapshot)
         ),
 
         "write_file": make_tool_registry_entry(
@@ -70,7 +78,10 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
                 "path": "path",
                 "content": "content"
             },
-            requires_permission=True
+            requires_permission=True,
+            permission_identity_args=["path", "content"],
+            rollback_snapshot=lambda path, content="": snapshot_file(workspace, path),
+            rollback_apply=lambda snapshot: rollback_file_snapshot(workspace, snapshot)
         ),
 
         "append_file": make_tool_registry_entry(
@@ -80,7 +91,10 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
                 "path": "path",
                 "content": "content"
             },
-            requires_permission=True
+            requires_permission=True,
+            permission_identity_args=["path", "content"],
+            rollback_snapshot=lambda path, content="": snapshot_file(workspace, path),
+            rollback_apply=lambda snapshot: rollback_file_snapshot(workspace, snapshot)
         ),
 
         "direct_response": make_tool_registry_entry(

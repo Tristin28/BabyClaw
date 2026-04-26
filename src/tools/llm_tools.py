@@ -44,6 +44,9 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
         This tool is used when the user wants a normal chatbot-style answer, such as greetings, explanations, email drafts, advice, rewrites, or
         questions about previous conversation.
     """
+    print("[DEBUG direct_response] prompt:", prompt)
+    print("[DEBUG direct_response] context:", context)
+    print("[DEBUG direct_response] recent_messages:", recent_messages)
     if not isinstance(prompt, str):
         raise TypeError("direct_response expected a string prompt")
 
@@ -57,8 +60,10 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
             "role": "system",
             "content": (
                 "You are the final response generator for an AI agent system. "
+                "Answer only the latest user prompt. "
+                "Use the provided memory and recent conversation only as background context when it is directly relevant. "
+                "Do not answer or continue old user tasks unless the latest prompt explicitly asks about them. "
                 "Answer the user directly and clearly. "
-                "Use the provided memory and recent conversation when relevant. "
                 "Do not mention internal tools, plans, execution traces, or hidden workflow details. "
                 "If the answer is not available in memory or recent conversation, say that you do not know."
             )

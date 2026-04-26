@@ -3,13 +3,13 @@
         i.e. it will only be able to access files if they are on the same directory. Hence this will enforce workspace sandboxing so the respective system it runs on
         is untouched.
     '''
-from src.tools.utils import WorkspaceConfig, resolve_workspace_path
+from src.tools.utils import WorkspaceConfig
 
 def read_file(workspace: WorkspaceConfig, path: str) -> str:
     """
         Reads a text file safely from inside the workspace sandbox.
     """
-    file_path = resolve_workspace_path(workspace, path)
+    file_path = workspace.resolve_workspace_path(path)
 
     if not file_path.exists():
         raise FileNotFoundError(f"File '{path}' not found")
@@ -27,7 +27,7 @@ def list_dir(workspace: WorkspaceConfig, path: str = ".",) -> list[str]:
         Further point i set the local variable path to "." as a default value so the system can 
         know about anything which is in the workspace folder too and not just subdirectories
     """
-    dir_path = resolve_workspace_path(workspace, path)
+    dir_path = workspace.resolve_workspace_path(path)
 
     if not dir_path.exists():
         raise FileNotFoundError(f"Directory '{path}' not found")
@@ -46,7 +46,7 @@ def find_file(workspace: WorkspaceConfig, query: str, directory: str = ".") -> s
         - no file matches
         - more than one file matches
     """
-    dir_path = resolve_workspace_path(workspace, directory)
+    dir_path = workspace.resolve_workspace_path(directory)
 
     if not dir_path.exists():
         raise FileNotFoundError(f"Directory '{directory}' not found")
@@ -69,7 +69,7 @@ def find_file(workspace: WorkspaceConfig, query: str, directory: str = ".") -> s
     return matches[0]
 
 def create_file(workspace: WorkspaceConfig, path: str, content: str = "") -> str:
-    file_path = resolve_workspace_path(workspace, path)
+    file_path = workspace.resolve_workspace_path(path)
 
     if file_path.exists():
         raise FileExistsError(f"File '{path}' already exists")
@@ -83,7 +83,7 @@ def create_file(workspace: WorkspaceConfig, path: str, content: str = "") -> str
 
 
 def write_file(workspace: WorkspaceConfig, path: str, content: str) -> str:
-    file_path = resolve_workspace_path(workspace, path)
+    file_path = workspace.resolve_workspace_path(path)
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -94,7 +94,7 @@ def write_file(workspace: WorkspaceConfig, path: str, content: str) -> str:
 
 
 def append_file(workspace: WorkspaceConfig, path: str, content: str) -> str:
-    file_path = resolve_workspace_path(workspace, path)
+    file_path = workspace.resolve_workspace_path(path)
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -102,3 +102,29 @@ def append_file(workspace: WorkspaceConfig, path: str, content: str) -> str:
         f.write(content)
 
     return f"Content appended to '{path}' successfully."
+
+def snapshot_file(workspace: WorkspaceConfig, path: str) -> dict:
+    file_path = workspace.resolve_workspace_path(path)
+
+    if file_path.exists():
+        return {
+            "path": path,
+            "existed": True,
+            "content": file_path.read_text(encoding="utf-8")
+        }
+
+    return {
+        "path": path,
+        "existed": False,
+        "content": None
+    }
+
+
+def rollback_file_snapshot(workspace: WorkspaceConfig, snapshot: dict):
+    file_path = workspace.resolve_workspace_path(snapshot["path"])
+
+    if snapshot["existed"]:
+        file_path.write_text(snapshot["content"], encoding="utf-8")
+    else:
+        if file_path.exists():
+            file_path.unlink()
