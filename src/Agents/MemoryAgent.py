@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 class MemoryAgent(Agent):
     #Squared L2 distance ceiling used when filtering vector-store hits.
     #Chroma's default embedding (all-MiniLM-L6-v2) returns squared L2 distance,
-    #so a value of ~1.2 corresponds to roughly cosine similarity 0.4 which still
+    #so a value of approximate 1.2 corresponds to roughly cosine similarity 0.4 which still
     #captures paraphrased matches like "what is my name?" vs a stored fact.
     RELEVANCE_THRESHOLD = 1.2
 
@@ -28,7 +28,7 @@ class MemoryAgent(Agent):
                         "properties": {
                             "memory_type": {
                                 "type": "string",
-                                "enum": ["user_fact", "user_preference", "task_lesson"], #llm can only pick one of these as memory_types
+                                "enum": ["user_fact", "user_preference"], #llm can only pick one of these as memory_types
                                 "description": "Type of memory."
                             },
                             "topic":{
@@ -180,69 +180,45 @@ class MemoryAgent(Agent):
             "timestamp": timestamp
         }
     
-    def build_messages(self, user_task: str, episode_summary: str) -> list[dict]:
+    def build_messages(self, user_task: str) -> list[dict]:
         return [
                 {
                     "role": "system",
                     "content": """
                                 You are a memory selection agent.
 
-                                Your job is to decide whether useful long-term semantic memory should be stored from a completed workflow that was accepted by the reviewer.
+                                Your job is to decide whether the user's latest message contains a useful long-term memory.
 
-                                Store only these kinds of memories:
+                                Only store information that the user literally stated in the user task.
+
+                                Allowed memory types:
 
                                 1. user_fact
-                                - Stable facts about the user that may help in future tasks.
-                                - Example: the user's project, tools they use, recurring goals, or stable background context.
+                                - Stable facts explicitly stated by the user.
+                                - Example: "my name is Tristin" -> user_fact, topic=user_name
 
                                 2. user_preference
-                                - Stable preferences about how the user likes responses, explanations, or workflows.
-                                - Example: prefers short conceptual explanations first, prefers step-by-step guidance.
-
-                                3. task_lesson
-                                - A reusable lesson learned from this successful task that may help future similar tasks.
-                                - Store this only if it is generalisable and useful beyond this single run.
+                                - Stable preferences explicitly stated by the user.
+                                - Example: "I prefer short explanations" -> user_preference, topic=explanation_style
 
                                 Do NOT store:
-                                - system architecture facts
-                                - coordinator, planner, executor, reviewer, or memory agent role descriptions
-                                - fixed workflow rules already defined by the system
-                                - temporary execution logs
-                                - repeated tool calls or step-by-step tool traces
-                                - low-value intermediate outputs
-                                - raw summaries of the conversation
-                                - one-off details that are unlikely to help in future tasks
-                                - anything that is already obvious from the system design
-                                - temporary workspace facts,
-                                - file names that happened to exist,
-                                - tool usage details,
-                                - inferred preferences based only on one task,
-                                - facts about what tools were used,
-                                - duplicate memories already stored,
-                                - age unless the user explicitly asks to remember it,
-                                - current file contents,
-                                - one-time task details.
+                                - task lessons
+                                - facts from planner output
+                                - facts from executor output
+                                - facts from reviewer output
+                                - facts from assistant replies
+                                - inferred preferences
+                                - guesses
+                                - temporary task details
+                                - file names created during a task
+                                - tool usage details
+                                - anything not clearly stated by the user
 
                                 Storage rules:
-                                1. Return only valid JSON matching the provided schema.
-                                2. If nothing useful should be remembered, return should_store=false and memories=[].
-                                3. Each memory entry must contain exactly one short meaningful reusable idea.
-                                4. Do not combine multiple unrelated ideas into one memory entry.
-                                5. Keep memory content short, clear, and useful for future retrieval.
-                                6. Prefer stable and reusable memories over temporary details.
-                                7. A task_lesson must describe a lesson that can help with future similar tasks, not just describe what happened here.
-                                8. Do not store system facts just because they appeared in the planner, executor, or reviewer outputs.
-
-                                Important:
-                                The raw user task is the most important source for user facts and preferences.
-
-                                If the user explicitly states a stable fact about themselves, their project, their tools, their goals, or their preferences, store it.
-
-                                Examples:
-                                - "my name is Tristin" -> user_fact, topic=user_name
-                                - "I am building BabyClaw" -> user_fact, topic=current_project
-                                - "I prefer short explanations" -> user_preference, topic=explanation_style
-                                - "I use Ollama with qwen2.5:3b" -> user_fact, topic=tools_used
+                                1. Return only valid JSON matching the schema.
+                                2. If the user did not explicitly state a stable fact/preference, return should_store=false and memories=[].
+                                3. Each memory must be short and reusable.
+                                4. The memory content must be grounded in the exact user task.
                                 """
                 },
                 {
@@ -250,21 +226,52 @@ class MemoryAgent(Agent):
                     "content": f"""
                                 User task:
                                 {user_task}
-
-                                Episode summary:
-                                {episode_summary}
                                 """        
                 }
         ]
     
+    def is_grounded_in_user_task(self, memory: dict, user_task: str) -> bool:
+        """
+        Checks that the memory content is meaningfully grounded in what the user literally said.
+        This prevents storing names/facts invented by the LLM.
+        """
 
-    def validate_llm_response(self, response: dict):
+        content = memory.get("content", "").lower()
+        task = user_task.lower()
+
+        # Remove very common words that do not prove grounding.
+        stop_words = {
+            "the", "a", "an", "is", "are", "am", "i", "me", "my", "you",
+            "user", "users", "to", "of", "and", "or", "in", "on", "for",
+            "that", "this", "it", "with", "as", "be", "was"
+        }
+
+        task_words = {
+            word.strip(".,!?;:'\"()[]{}").lower()
+            for word in task.split()
+            if len(word.strip(".,!?;:'\"()[]{}")) > 2
+        }
+
+        content_words = {
+            word.strip(".,!?;:'\"()[]{}").lower()
+            for word in content.split()
+            if len(word.strip(".,!?;:'\"()[]{}")) > 2
+        }
+
+        task_words = task_words - stop_words
+        content_words = content_words - stop_words
+
+        overlap = task_words.intersection(content_words)
+
+        return len(overlap) >= 1
+    
+    def validate_llm_response(self, response: dict, user_task: str):
         if not response.get("should_store"):
             return []
 
         valid_memories = []
 
-        ALLOWED_MEMORY_TYPES = {"user_fact", "user_preference", "task_lesson"}
+        ALLOWED_MEMORY_TYPES = {"user_fact", "user_preference"}
 
         for memory in response.get("memories", []):
             memory_type = memory.get("memory_type")
@@ -302,7 +309,7 @@ class MemoryAgent(Agent):
             Using an llm in order to determine what type of memory will be stored inside the vector db and how it will be stored
             That is how the chunks are split so that specific chunks are embeded together in order to have it have meaning and not be pointless
         '''
-        messages = self.build_messages(user_task=user_task, episode_summary=episode_summary)
+        messages = self.build_messages(user_task=user_task)
         
         try:
             memory_result = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
@@ -313,7 +320,7 @@ class MemoryAgent(Agent):
                        message_type="memory_store", status="completed", response=response, visibility="internal")
             
             
-            valid_memories = self.validate_llm_response(response=memory_result)
+            valid_memories = self.validate_llm_response(response=memory_result, user_task=user_task)
             if valid_memories:
                 for memory in valid_memories:
 
