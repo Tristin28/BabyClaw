@@ -42,11 +42,36 @@ class PlanCompiler:
         # Maps planner-provided ids to compiler-normalised ids.
         self.old_to_new_id: dict[int, int] = {}
 
+    def apply_safe_defaults(self, steps: list[dict]) -> list[dict]:
+        '''
+            Deterministic fallback for tools where a missing argument is almost always
+            "the user gave no value". Lets the workflow proceed instead of failing
+            because the planner forgot to emit content="".
+        '''
+        EMPTY_CONTENT_TOOLS = {"create_file", "write_file", "append_file"}
+
+        for step in steps:
+            tool_name = step["tool"]
+            args = step.get("args", {})
+
+            if tool_name in EMPTY_CONTENT_TOOLS:
+                has_direct = "content" in args
+                has_step = "content_step" in args
+
+                if not has_direct and not has_step:
+                    args["content"] = ""
+
+            step["args"] = args
+
+        return steps
+    
     def compile(self, raw_plan: dict) -> dict:
         self.validate_top_level_schema(raw_plan)
 
         normalised_steps = self.normalise_step_ids(raw_plan["steps"])
         normalised_steps = self.remap_step_arguments(normalised_steps)
+
+        normalised_steps = self.apply_safe_defaults(normalised_steps)
 
         self.reject_fake_step_strings(normalised_steps)
         self.validate_step_args_are_allowed(normalised_steps)

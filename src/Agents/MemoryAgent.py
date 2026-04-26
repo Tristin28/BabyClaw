@@ -7,6 +7,12 @@ from src.OllamaClient import OllamaClient
 from datetime import datetime, timezone
 
 class MemoryAgent(Agent):
+    #Squared L2 distance ceiling used when filtering vector-store hits.
+    #Chroma's default embedding (all-MiniLM-L6-v2) returns squared L2 distance,
+    #so a value of ~1.2 corresponds to roughly cosine similarity 0.4 which still
+    #captures paraphrased matches like "what is my name?" vs a stored fact.
+    RELEVANCE_THRESHOLD = 1.2
+
     SCHEMA = {
             "type": "object",
             "properties": {
@@ -118,13 +124,24 @@ class MemoryAgent(Agent):
         '''
         results =  self.vector_repo.retrieve_relevant_memory(task=task, k=k)
 
+        #Guarding against an empty collection or a query that returned no rows,
+        #since chroma will hand back {"documents": [[]], "distances": [[]], ...}
+        #on a brand new database and indexing [0] on an empty inner list crashes downstream.
+        documents_outer = results.get("documents") or []
+        if not documents_outer or not documents_outer[0]:
+            return ""
+
         #Applying threshold filtering because even though 10 documents would be retrieved it wouldnt necessarly mean they are actually related to the task sent
         retrieved_memories = results["documents"][0] #returning the k most relevant chunks to the query sent, where documents is a key in the returned dict that stores [[strings]]
         distances = results["distances"][0] #respective distances from query to those chunks, where the distances key is stores [[integers]]
         meta_data = results["metadatas"][0] #stores [[dict]]
 
-        candidates = [(fact, meta) for fact, dist, meta in zip(retrieved_memories, distances,meta_data) if dist < 0.6]
-        
+        candidates = [
+            (fact, meta)
+            for fact, dist, meta in zip(retrieved_memories, distances, meta_data)
+            if dist <= MemoryAgent.RELEVANCE_THRESHOLD
+        ]
+
         #retrieving the respective facts which do not conflict by applying the respective method
         filtered_candidates = self.resolve_conflicts(candidates=candidates)
 
@@ -354,7 +371,6 @@ class MemoryAgent(Agent):
             "used to read",
             "prefers using tools",
             "current directory",
-            "workspace",
             "hello.txt"
         ]
 

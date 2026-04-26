@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BabyClaw</title>
+    <style>
+        :root {
+            --bg: #0f1115;
+            --panel: #161a22;
+            --panel-2: #1d222c;
+            --border: #2a3140;
+            --text: #e6e9ef;
+            --muted: #8a93a6;
+            --accent: #6ea8fe;
+            --user: #2f6feb;
+            --agent: #2a3140;
+            --warn: #d29922;
+            --error: #f85149;
+            --success: #3fb950;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        .app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            max-width: 980px;
+            margin: 0 auto;
+        }
+
+        header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 18px;
+            letter-spacing: 0.5px;
+        }
+
+        header .subtitle {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .workspace {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .workspace input {
+            background: var(--panel);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            width: 280px;
+        }
+
+        .workspace button {
+            background: var(--panel-2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .workspace button:hover { border-color: var(--accent); }
+
+        #chat {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .msg {
+            max-width: 85%;
+            padding: 10px 14px;
+            border-radius: 10px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 14px;
+        }
+
+        .msg.user {
+            background: var(--user);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 2px;
+        }
+
+        .msg.agent {
+            background: var(--agent);
+            align-self: flex-start;
+            border-bottom-left-radius: 2px;
+        }
+
+        .msg.system {
+            background: var(--panel);
+            border: 1px dashed var(--border);
+            color: var(--muted);
+            align-self: center;
+            font-size: 12px;
+            max-width: 90%;
+            text-align: center;
+        }
+
+        .msg .meta {
+            font-size: 11px;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+
+        .msg.completed { border-left: 3px solid var(--success); }
+        .msg.failed { border-left: 3px solid var(--error); }
+        .msg.cancelled { border-left: 3px solid var(--warn); }
+        .msg.permission { border-left: 3px solid var(--warn); }
+
+        .tool-list {
+            margin-top: 8px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12px;
+            color: var(--text);
+        }
+
+        .tool-list .tool { padding: 4px 0; }
+        .tool-list .tool + .tool { border-top: 1px solid var(--border); }
+
+        .permission-actions {
+            margin-top: 10px;
+            display: flex;
+            gap: 8px;
+        }
+
+        .permission-actions button {
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .permission-actions .approve {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
+        }
+
+        .permission-actions .deny {
+            background: var(--panel-2);
+            color: var(--text);
+        }
+
+        .issue-list {
+            margin: 6px 0 0 18px;
+            padding: 0;
+            color: var(--error);
+        }
+
+        form#composer {
+            display: flex;
+            gap: 8px;
+            padding: 14px 20px;
+            border-top: 1px solid var(--border);
+            background: var(--panel);
+        }
+
+        form#composer textarea {
+            flex: 1;
+            resize: none;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 14px;
+            font-family: inherit;
+            min-height: 42px;
+            max-height: 140px;
+        }
+
+        form#composer button {
+            background: var(--user);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0 18px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        form#composer button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        .typing {
+            color: var(--muted);
+            font-style: italic;
+            font-size: 13px;
+            align-self: flex-start;
+            padding: 4px 0 0 4px;
+        }
+
+        .toast {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            opacity: 0;
+            transform: translateY(-6px);
+            transition: opacity .2s, transform .2s;
+        }
+
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.error { border-color: var(--error); color: #ffd2d0; }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <header>
+            <div>
+                <h1>BabyClaw</h1>
+                <div class="subtitle">Talk to the agent system</div>
+            </div>
+            <div class="workspace">
+                <input id="workspace-input" placeholder="workspace path" />
+                <button id="workspace-set">Set</button>
+            </div>
+        </header>
+
+        <div id="chat">
+            <div class="msg system">Type a task below. The planner, executor, reviewer and memory agents will work together to handle it.</div>
+        </div>
+
+        <form id="composer">
+            <textarea id="input" placeholder="Ask BabyClaw to do something..." rows="1"></textarea>
+            <button type="submit" id="send-btn">Send</button>
+        </form>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const chat = document.getElementById("chat");
+        const composer = document.getElementById("composer");
+        const input = document.getElementById("input");
+        const sendBtn = document.getElementById("send-btn");
+        const wsInput = document.getElementById("workspace-input");
+        const wsBtn = document.getElementById("workspace-set");
+        const toast = document.getElementById("toast");
+
+        let busy = false;
+
+        function escapeHtml(text) {
+            return String(text ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+        }
+
+        function showToast(text, isError) {
+            toast.textContent = text;
+            toast.classList.toggle("error", !!isError);
+            toast.classList.add("show");
+            clearTimeout(showToast._t);
+            showToast._t = setTimeout(() => toast.classList.remove("show"), 2600);
+        }
+
+        function scrollToBottom() {
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function addUserMessage(text) {
+            const el = document.createElement("div");
+            el.className = "msg user";
+            el.textContent = text;
+            chat.appendChild(el);
+            scrollToBottom();
+        }
+
+        function addSystemMessage(text) {
+            const el = document.createElement("div");
+            el.className = "msg system";
+            el.textContent = text;
+            chat.appendChild(el);
+            scrollToBottom();
+        }
+
+        function addAgentMessage(payload) {
+            const el = document.createElement("div");
+            el.className = `msg agent ${payload.kind || ""}`;
+
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            meta.textContent = `BabyClaw - ${payload.status}${payload.step_index != null ? ` (step ${payload.step_index})` : ""}`;
+            el.appendChild(meta);
+
+            const body = document.createElement("div");
+            body.textContent = payload.text || "";
+            el.appendChild(body);
+
+            if (payload.kind === "failed" && Array.isArray(payload.issues) && payload.issues.length) {
+                const ul = document.createElement("ul");
+                ul.className = "issue-list";
+                for (const issue of payload.issues) {
+                    const li = document.createElement("li");
+                    li.textContent = issue;
+                    ul.appendChild(li);
+                }
+                el.appendChild(ul);
+            }
+
+            if (payload.kind === "permission_request") {
+                const tools = document.createElement("div");
+                tools.className = "tool-list";
+
+                if (Array.isArray(payload.requested_tools) && payload.requested_tools.length) {
+                    for (const tool of payload.requested_tools) {
+                        const row = document.createElement("div");
+                        row.className = "tool";
+                        row.innerHTML = `<strong>${escapeHtml(tool.tool)}</strong> ` +
+                            escapeHtml(JSON.stringify(tool.args ?? {}));
+                        tools.appendChild(row);
+                    }
+                } else {
+                    tools.textContent = "(no tools listed)";
+                }
+
+                el.appendChild(tools);
+
+                const actions = document.createElement("div");
+                actions.className = "permission-actions";
+
+                const approveBtn = document.createElement("button");
+                approveBtn.className = "approve";
+                approveBtn.textContent = "Approve";
+                approveBtn.onclick = () => respondPermission(true, actions);
+
+                const denyBtn = document.createElement("button");
+                denyBtn.className = "deny";
+                denyBtn.textContent = "Deny";
+                denyBtn.onclick = () => respondPermission(false, actions);
+
+                actions.appendChild(approveBtn);
+                actions.appendChild(denyBtn);
+                el.appendChild(actions);
+            }
+
+            chat.appendChild(el);
+            scrollToBottom();
+        }
+
+        function setBusy(value) {
+            busy = value;
+            sendBtn.disabled = value;
+            input.disabled = value;
+        }
+
+        function showTyping() {
+            const el = document.createElement("div");
+            el.className = "typing";
+            el.id = "typing-indicator";
+            el.textContent = "BabyClaw is thinking...";
+            chat.appendChild(el);
+            scrollToBottom();
+        }
+
+        function clearTyping() {
+            const el = document.getElementById("typing-indicator");
+            if (el) el.remove();
+        }
+
+        async function loadState() {
+            try {
+                const res = await fetch("/api/state");
+                const data = await res.json();
+                if (data.workspace) wsInput.value = data.workspace;
+            } catch (err) {
+                showToast("Could not load state.", true);
+            }
+        }
+
+        async function sendText(text) {
+            if (busy || !text.trim()) return;
+
+            addUserMessage(text);
+            setBusy(true);
+            showTyping();
+
+            try {
+                const res = await fetch("/api/message", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text }),
+                });
+                const data = await res.json();
+                clearTyping();
+
+                if (!data.ok) {
+                    showToast(data.error || "Request failed.", true);
+                    return;
+                }
+
+                addAgentMessage(data.message);
+            } catch (err) {
+                clearTyping();
+                showToast("Network error.", true);
+            } finally {
+                setBusy(false);
+                input.focus();
+            }
+        }
+
+        async function respondPermission(approved, actionsEl) {
+            if (busy) return;
+
+            for (const btn of actionsEl.querySelectorAll("button")) btn.disabled = true;
+
+            addUserMessage(approved ? "Approve" : "Deny");
+            setBusy(true);
+            showTyping();
+
+            try {
+                const res = await fetch("/api/permission", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ approved }),
+                });
+                const data = await res.json();
+                clearTyping();
+
+                if (!data.ok) {
+                    showToast(data.error || "Request failed.", true);
+                    return;
+                }
+
+                addAgentMessage(data.message);
+            } catch (err) {
+                clearTyping();
+                showToast("Network error.", true);
+            } finally {
+                setBusy(false);
+                input.focus();
+            }
+        }
+
+        composer.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const text = input.value;
+            input.value = "";
+            input.style.height = "auto";
+            sendText(text);
+        });
+
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                composer.requestSubmit();
+            }
+        });
+
+        input.addEventListener("input", () => {
+            input.style.height = "auto";
+            input.style.height = Math.min(input.scrollHeight, 140) + "px";
+        });
+
+        wsBtn.addEventListener("click", async () => {
+            const path = wsInput.value.trim();
+            if (!path) return;
+
+            try {
+                const res = await fetch("/api/workspace", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ path }),
+                });
+                const data = await res.json();
+
+                if (!data.ok) {
+                    showToast(data.error || "Could not change workspace.", true);
+                    return;
+                }
+
+                wsInput.value = data.workspace;
+                addSystemMessage(`Workspace changed to ${data.workspace}`);
+                showToast("Workspace updated.");
+            } catch (err) {
+                showToast("Network error.", true);
+            }
+        });
+
+        loadState();
+    </script>
+</body>
+</html>

@@ -56,13 +56,16 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
         {
             "role": "system",
             "content": (
-                "You are the final response generator for an AI agent system. "
-                "Answer only the latest user prompt. "
-                "Use the provided memory and recent conversation only as background context when it is directly relevant. "
-                "Do not answer or continue old user tasks unless the latest prompt explicitly asks about them. "
-                "Answer the user directly and clearly. "
-                "Do not mention internal tools, plans, execution traces, or hidden workflow details. "
-                "If the answer is not available in memory or recent conversation, say that you do not know."
+                "You are the final response generator for an AI agent system.\n"
+                "\n"
+                "Hard rules:\n"
+                "1. Answer ONLY the text inside <CURRENT_PROMPT>...</CURRENT_PROMPT>.\n"
+                "2. Do NOT repeat, continue, restate, or act on any earlier task in the recent conversation.\n"
+                "3. Do NOT describe what you would do; just answer.\n"
+                "4. Do NOT mention files, tools, plans, or workflow unless the current prompt explicitly asks about them.\n"
+                "5. Use 'Relevant memory' and 'Recent conversation' ONLY to answer the current prompt. If they are unrelated, ignore them.\n"
+                "6. If the answer is not present in memory or the prompt itself, say you do not know. Do not guess.\n"
+                "7. Keep the response short and direct."
             )
         }
     ]
@@ -70,7 +73,7 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
     if context:
         messages.append({
             "role": "system",
-            "content": f"Relevant memory/context:\n{context}"
+            "content": f"Relevant memory (use only if it answers the current prompt):\n{context}"
         })
 
     if recent_messages:
@@ -81,12 +84,15 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
 
         messages.append({
             "role": "system",
-            "content": f"Recent conversation:\n{conversation_text}"
+            "content": (
+                "Recent conversation (background only, NOT a task to continue):\n"
+                f"{conversation_text}"
+            )
         })
 
     messages.append({
         "role": "user",
-        "content": prompt.strip()
+        "content": f"<CURRENT_PROMPT>\n{prompt.strip()}\n</CURRENT_PROMPT>"
     })
 
     response = llm_client.invoke_text(messages=messages, stream=False).strip()
