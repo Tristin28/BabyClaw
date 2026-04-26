@@ -1,7 +1,7 @@
 from src.Agents.BaseAgent import Agent
 from src.message import Message 
 from typing import Any
-#from concurrent.futures import ThreadPoolExecutor, as_completed
+#from concurrent.futures import ThreadPoolExecutor, as_completed - removed parallel work
 
 class ExecutorAgent(Agent):
     def __init__(self, tool_registry: dict):
@@ -61,20 +61,18 @@ class ExecutorAgent(Agent):
     
     def validate_result(self, tool_name: str, result: Any):
         '''
-            Validates whether the result (being a built in python object) returned by a tool is usable 
-            (only checking built in objects as other objects can have diff semantics, as then semantics will be checked by the reviewer agent)
+            Validates whether the result returned by a tool is usable.
+            This should be tool-specific because some empty results are valid.
         '''
         if result is None:
             raise ValueError(f"Tool '{tool_name}' returned None")
 
-        EMPTY_NOT_ALLOWED = {"summarise_txt", "direct_response", "list_dir"} #tools which should not return empty strings
-        if tool_name in EMPTY_NOT_ALLOWED:
+        NON_EMPTY_STRING_TOOLS = { "direct_response", "summarise_txt", "create_file", "write_file", "append_file", "find_file"}
+
+        if tool_name in NON_EMPTY_STRING_TOOLS:
             if not isinstance(result, str) or result.strip() == "":
                 raise ValueError(f"Tool '{tool_name}' returned an empty string")
-
-        if isinstance(result, (list, dict, tuple, set)) and len(result) == 0:
-            raise ValueError(f"Tool '{tool_name}' returned an empty {type(result).__name__}")
-
+            
     def execute_tools(self, execution_state: dict, runnable_steps: list[dict]) -> dict:
         #Making use of mutability, as dict object is mutable then if some changes happen by any reference all other pointers pointing to respective obj will see the change
         step_results = execution_state["step_results"] #stores the results of each step_id i.e. step_id: result
@@ -85,21 +83,38 @@ class ExecutorAgent(Agent):
         completed_ids = []
 
         for step in runnable_steps:
+            resolved_args = {}
+
             try:
-                result = self.execute_step(step, execution_state)
+                result, resolved_args = self.execute_step(step, execution_state)
                 self.validate_result(step["tool"], result)
 
                 step_results[step["id"]] = result
                 step_status[step["id"]] = "completed"
                 completed_ids.append(step["id"])
 
-                execution_trace.append({"id": step["id"], "tool": step["tool"], "args":step.get("args",{}), "depends_on": step.get("depends_on",[]), 
-                                        "status": "completed", "result": result})
+                execution_trace.append({
+                    "id": step["id"],
+                    "tool": step["tool"],
+                    "args": step.get("args", {}),
+                    "resolved_args": resolved_args,
+                    "depends_on": step.get("depends_on", []),
+                    "status": "completed",
+                    "result": result
+                })
 
             except Exception as e:
                 step_status[step["id"]] = "failed"
-                execution_trace.append({"id": step["id"], "tool": step["tool"], "args":step.get("args",{}), "depends_on": step.get("depends_on",[]), 
-                                        "status": "failed", "error": str(e)})
+
+                execution_trace.append({
+                    "id": step["id"],
+                    "tool": step["tool"],
+                    "args": step.get("args", {}),
+                    "resolved_args": resolved_args,
+                    "depends_on": step.get("depends_on", []),
+                    "status": "failed",
+                    "error": str(e)
+                })
                 
                 #propogating the error upward into the stack frames which will be handled by the run method however, it has to be directed accordingly in coord
                 raise RuntimeError(f"Step {step['id']} failed: {e}") from e
@@ -108,18 +123,23 @@ class ExecutorAgent(Agent):
         execution_state["remaining_steps"] = [step for step in execution_state["remaining_steps"] if step["id"] not in completed_ids] 
 
         return execution_state
-
-    def execute_step(self, plan_output_step: dict, execution_state: dict) -> Any:
+    
+    def execute_step(self, plan_output_step: dict, execution_state: dict) -> tuple[Any, dict]:
         tool_name = plan_output_step["tool"]
+
         if tool_name not in self.tool_registry:
             raise ValueError(f"Unknown tool {tool_name}")
         
         tool_def = self.tool_registry[tool_name]
 
-        tool_fn = tool_def ["func"] #stores the actual method
+        tool_fn = tool_def["func"] #stores the actual method
         input_map = tool_def["input_map"] #stores the arg name as key and its value would be key inside args (dict inside plan_output_step)
 
-        resolved_args = self.resolve_args(plan_output_step=plan_output_step, execution_state=execution_state, input_map=input_map) 
+        resolved_args = self.resolve_args(
+            plan_output_step=plan_output_step,
+            execution_state=execution_state,
+            input_map=input_map
+        ) 
 
         snapshot = None
         rollback_snapshot_fn = tool_def.get("rollback_snapshot")
@@ -127,10 +147,7 @@ class ExecutorAgent(Agent):
         #Taking the rollback snapshot before the tool runs, because this stores the old file state before it gets modified
         if rollback_snapshot_fn:
             snapshot = rollback_snapshot_fn(**resolved_args)
-        
-        result = tool_fn(**resolved_args)
 
-        if rollback_snapshot_fn:
             execution_state.setdefault("rollback_log", []).append({
                 "step_id": plan_output_step["id"],
                 "tool": tool_name,
@@ -138,8 +155,10 @@ class ExecutorAgent(Agent):
                 "snapshot": snapshot
             })
 
-        return result
-    
+        result = tool_fn(**resolved_args)
+
+        return result, resolved_args
+        
     def resolve_args(self, plan_output_step: dict, execution_state: dict, input_map: dict) -> dict: 
         '''
                 Takes in the argument values selected by the llm in the planning stage and initialisign them to the respective local variables of the chosen funciton

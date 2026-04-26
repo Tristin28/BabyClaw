@@ -27,3 +27,9 @@ class VectorRepository():
 
     def retrieve_relevant_memory(self, task: str, k: int) -> dict:
         return self.collection.query(query_texts=[task], n_results=k)
+
+    def get_all_memories(self) -> dict:
+        '''
+            Debug/helper method used to visually confirm that memories are actually being stored inside the vector database.
+        '''
+        return self.collection.get()

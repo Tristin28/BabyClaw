@@ -2,6 +2,7 @@ from src.Agents.BaseAgent import Agent
 from src.OllamaClient import OllamaClient
 from src.message import Message
 from src.Agents.Reviewing.ReviewPrompt import REVIEWER_SYSTEM_PROMPT
+import json 
 
 class ReviewerAgent(Agent):
     REVIEWER_SYSTEM_PROMPT = REVIEWER_SYSTEM_PROMPT
@@ -60,8 +61,40 @@ class ReviewerAgent(Agent):
         for issue in review_response["issues"]:
             if not isinstance(issue, str):
                 raise ValueError("Each issue must be a string")
+            
+    def build_review_evidence(self, executor_response: dict) -> dict:
+        """
+            Builds the small clean object that the reviewer LLM is allowed to see.
+            This hides architecture-only data such as rollback logs, approved actions,
+            permission state, and internal execution state.
+        """
+        clean_steps = []
 
-    def build_messages(self, user_task: str, execution_trace: dict) -> list[dict]:
+        for step in executor_response.get("execution_trace", []):
+            clean_step = {
+                "id": step.get("id"),
+                "tool": step.get("tool"),
+                "status": step.get("status"),
+                "args": step.get("args", {}),
+            }
+
+            if "resolved_args" in step:
+                clean_step["resolved_args"] = step["resolved_args"]
+
+            if "result" in step:
+                clean_step["result"] = step["result"]
+
+            if "error" in step:
+                clean_step["error"] = step["error"]
+
+            clean_steps.append(clean_step)
+
+        return {
+            "goal": executor_response.get("goal", ""),
+            "steps": clean_steps
+        }
+
+    def build_messages(self, user_task: str, review_evidence: dict) -> list[dict]:
         return [
             {
                 "role": "system",
@@ -74,20 +107,21 @@ class ReviewerAgent(Agent):
                             {user_task}
 
                             Important:
-                            Only judge whether the execution results satisfy the CURRENT USER TASK above.
-                            Do not judge old user messages, recent conversation, memory, or unrelated prior tasks.
+                            Only judge whether the clean execution evidence satisfies the CURRENT USER TASK above.
+                            Do not judge old user messages, memory, rollback data, permission data, or unrelated prior tasks.
 
-                            EXECUTION RESULTS:
-                            {execution_trace}
+                            CLEAN EXECUTION EVIDENCE:
+                            {json.dumps(review_evidence, indent=2)}
                             """
             }
         ]
 
-    def run(self, conversation_id: int, step_index: int, user_task: str, execution_trace: dict) -> Message:
+    def run(self, conversation_id: int, step_index: int, user_task: str, execution_response: dict) -> Message:
         try:
-            self.validate_input(user_task=user_task, execution_trace=execution_trace, conversation_id=conversation_id, step_index=step_index)
+            self.validate_input(user_task=user_task, execution_trace=execution_response, conversation_id=conversation_id, step_index=step_index)
 
-            messages = self.build_messages(user_task=user_task, execution_trace=execution_trace)
+            review_evidence = self.build_review_evidence(execution_response)
+            messages = self.build_messages(user_task=user_task, review_evidence=review_evidence)
 
             review_response = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
             self.validate_llm_response(review_response)

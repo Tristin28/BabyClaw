@@ -147,9 +147,12 @@ class Coordinator():
 
         direct_outputs = [step.get("result") for step in trace if step.get("tool") == "direct_response" and step.get("status") == "completed" and step.get("result")]
 
-        display_outputs = [step.get("result") for step in trace if step.get("tool") in {"read_file", "summarise_txt"} and 
-                           step.get("status") == "completed" and step.get("result")]
+        display_tools = {"read_file", "list_dir", "find_file", "summarise_txt", "create_file", "write_file", "append_file", "delete_file", 
+                         "search_text", "replace_text","create_dir","delete_dir", "move_path", "copy_path","find_file_recursive"}
 
+        display_outputs = [step.get("result") for step in trace if step.get("tool") in display_tools and step.get("status") == "completed" 
+                           and step.get("result") is not None]
+        
         display_result = direct_outputs[-1] if direct_outputs else (display_outputs[-1] if display_outputs else None)
 
         if direct_outputs:
@@ -268,28 +271,25 @@ class Coordinator():
 
         executor_response = executor_msg.response #will only contain messages with .status == "completed"
         
-        print("[DEBUG reviewer user_task]:", user_task)
-        print("[DEBUG reviewer executor_response]:", executor_response)
-
-        reviewer_msg = self.reviewer.run(conversation_id=conversation_id,step_index=self.REVIEWER_STEP, user_task = user_task, execution_trace = executor_response)
+        reviewer_msg = self.reviewer.run(conversation_id=conversation_id,step_index=self.REVIEWER_STEP, user_task = user_task, execution_response = executor_response)
         self.memory.store_message(message=reviewer_msg)
 
         reviewer_response = reviewer_msg.response
         accepted = reviewer_msg.response.get("accepted", False)
 
         if not accepted:
-            rollback_results = self.rollback_execution(executor_response=executor_response)
+            rollback_results = [] #Setting it to empty for when reviewer rejects outcome because since it is stochasstic it might be wrong.
             issues = reviewer_response.get("issues", [])
             self.memory.store_message(message=Message(conversation_id=reviewer_msg.conversation_id, step_index=reviewer_msg.step_index, 
                                                     sender="memory", receiver="coordinator", target_agent=None, message_type="memory_store", 
                                                     status="completed", response={"stored": False, "reason": "Reviewer did not accept workflow"},
                                                     visibility="internal"))
-            '''
+            
             if not review_retry_used:
                 approved_actions = set(executor_response.get("approved_actions", []))
                 return self.replan_after_review_rejection(conversation_id=conversation_id, user_task=user_task, plan_response=plan_response,
                                                         executor_response=executor_response, reviewer_response=reviewer_response, approved_actions=approved_actions)
-            '''
+            
             
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP, 
                                             review_summary=reviewer_response.get("review_summary", "Reviewer rejected execution."),
@@ -328,7 +328,13 @@ class Coordinator():
                                                   error="Execution blocked: no runnable steps found.",
                                                   details=execution_state)
 
-            permission_steps = self.get_permission_required_steps(runnable_steps,execution_state=execution_state)
+            try:
+                permission_steps = self.get_permission_required_steps(runnable_steps, execution_state=execution_state)
+            except Exception as e:
+                return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                                  review_summary="Execution failed while resolving permission arguments.", issues=[str(e)],
+                                                  execution_response=execution_state, error=str(e),details={"runnable_steps": runnable_steps}
+                                                  )
 
             if permission_steps:
                 #Exits back to the start_workflow method which has to be routed back to the user so that it asks it the respective message being sent
@@ -532,6 +538,8 @@ class Coordinator():
             Uses the LLM to produce a concise, factual episode summary from the completed workflow. This summary is what the MemoryAgent uses to decide 
             whether something is useful to be considered as long-term semantic memory, and if no outcome is retrieved from llm a fallback summary is coded.
         """
+        cleaned_executor_response = self.reviewer.build_review_evidence(executor_response) #using the same funcitonality because it is important here too
+
         messages = [
             {
                 "role": "system",
@@ -552,7 +560,7 @@ class Coordinator():
                 "content": (
                     f"User task:\n{user_task}\n\n"
                     f"Planner goal:\n{planner_response.get('goal', 'N/A')}\n\n"
-                    f"Execution trace:\n{executor_response}\n\n"
+                    f"Execution trace:\n{cleaned_executor_response}\n\n"
                     f"Reviewer summary:\n{reviewer_response.get('review_summary', 'N/A')}"
                 ),
             },
@@ -584,21 +592,70 @@ class Coordinator():
             "folder",
             "directory",
             "workspace",
+
             "read file",
             "read the file",
             "read a file",
-            "create",
+
+            "create file",
+            "create a file",
+            "create new file",
+
+            "write file",
             "write to",
-            "save",
+            "save as",
+            "save it as",
+
             "append",
+            "append to",
+
             "overwrite",
-            "replace",
-            "delete",
-            "list",
+            "replace file",
+            "replace text",
+            "replace in file",
+
+            "delete file",
+            "remove file",
+            "copy file",
+            "copy",
+            "duplicate file",
+            "duplicate",
             "find file",
+            "list files",
+            "list folder",
+            "search in files",
+            "search text",
+            "find text",
             "summarise file",
+            "summarize file",
+            "summarise the file",
             "summarize the file",
-            "summarise a file"
+            "subdirectory",
+            "subdirectories",
+            "folder",
+            "folders",
+            "directory",
+            "directories",
+            "list tree",
+            "project tree",
+            "look through",
+            "recursive",
+            "create folder",
+            "create directory",
+            "delete folder",
+            "delete directory",
+            "remove folder",
+            "remove directory",
+            "move file",
+            "move folder",
+            "move directory",
+            "rename file",
+            "rename folder",
+            "copy file",
+            "copy folder",
+            "copy directory",
+            "duplicate file",
+            "duplicate folder",
         ]
 
         file_extensions = [

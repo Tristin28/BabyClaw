@@ -1,16 +1,68 @@
 from src.Memory.sql_database import DatabaseManager
 import json 
 from src.message import Message
+from datetime import datetime
+from pathlib import Path
+
 
 '''
     This class is going to handle what queries to tell the dbms to execute , while then the memory agent's job will just be when to store and what to retrieve
     That is this repository decides how to store/retrieve the Message object and memory agent will tell it when to do it
 '''
 class MessageRepository():
-    def __init__(self,db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
+
+    def make_json_safe(self, value):
+        """
+            Converts Python objects that JSON cannot store into JSON-safe values.
+
+            This is important because execution_state may contain sets, and SQLite stores
+            the message response as JSON text using json.dumps().
+        """
+
+        if isinstance(value, dict):
+            return {
+                str(key): self.make_json_safe(item)
+                for key, item in value.items()
+            }
+
+        if isinstance(value, list):
+            return [
+                self.make_json_safe(item)
+                for item in value
+            ]
+
+        if isinstance(value, tuple):
+            return [
+                self.make_json_safe(item)
+                for item in value
+            ]
+
+        if isinstance(value, set):
+            return [
+                self.make_json_safe(item)
+                for item in sorted(value, key=str)
+            ]
+
+        if isinstance(value, datetime):
+            return value.isoformat()
+
+        if isinstance(value, Path):
+            return str(value)
+
+        if isinstance(value, (bytes, bytearray)):
+            return f"<{len(value)} bytes>"
+
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+
+        #Fallback for any unexpected object type.
+        return str(value)
     
     def store_message(self, message: Message):
+        safe_response = self.make_json_safe(message.response)
+
         with self.db_manager.get_connection() as conn:
             conn.execute(
                 """
@@ -36,7 +88,7 @@ class MessageRepository():
                     message.target_agent,
                     message.message_type,
                     message.status,
-                    json.dumps(message.response), #converting into text because of how SQLite stores data (i.e. doesnt store python obj)
+                    json.dumps(safe_response), #converting into text because of how SQLite stores data (i.e. doesnt store python obj)
                     message.visibility,
                     message.timestamp,
                 )

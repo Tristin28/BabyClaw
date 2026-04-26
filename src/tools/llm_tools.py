@@ -44,9 +44,6 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
         This tool is used when the user wants a normal chatbot-style answer, such as greetings, explanations, email drafts, advice, rewrites, or
         questions about previous conversation.
     """
-    print("[DEBUG direct_response] prompt:", prompt)
-    print("[DEBUG direct_response] context:", context)
-    print("[DEBUG direct_response] recent_messages:", recent_messages)
     if not isinstance(prompt, str):
         raise TypeError("direct_response expected a string prompt")
 

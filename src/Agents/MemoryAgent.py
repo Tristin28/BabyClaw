@@ -196,6 +196,15 @@ class MemoryAgent(Agent):
                                 - raw summaries of the conversation
                                 - one-off details that are unlikely to help in future tasks
                                 - anything that is already obvious from the system design
+                                - temporary workspace facts,
+                                - file names that happened to exist,
+                                - tool usage details,
+                                - inferred preferences based only on one task,
+                                - facts about what tools were used,
+                                - duplicate memories already stored,
+                                - age unless the user explicitly asks to remember it,
+                                - current file contents,
+                                - one-time task details.
 
                                 Storage rules:
                                 1. Return only valid JSON matching the provided schema.
@@ -290,6 +299,15 @@ class MemoryAgent(Agent):
             valid_memories = self.validate_llm_response(response=memory_result)
             if valid_memories:
                 for memory in valid_memories:
+
+                    if self.should_reject_memory(memory):
+                        continue
+
+                    existing = self.get_relevant_memory(task=memory["content"], k=3)
+                    if memory["content"].lower() in existing.lower():
+                        #filtering out any infromation which already existss in the database
+                        continue
+
                     metadata = self.build_metadata(conversation_id=conversation_id, memory_type=memory["memory_type"], topic = memory["topic"], 
                                                     source="reviewer_accepted", confidence=memory["confidence"],timestamp=datetime.now(timezone.utc).isoformat())
 
@@ -311,3 +329,52 @@ class MemoryAgent(Agent):
         #Only returning message to indicate whether storing relative content succeeded or not
         return Message(conversation_id=conversation_id, step_index=step_index, sender="memory", receiver="coordinator", target_agent=None, 
                        message_type="memory_store", status=status, response=response, visibility="internal")
+    
+    def should_reject_memory(self, memory: dict) -> bool:
+        '''
+            Filtering the respective llm generated summary deterministicly based on specific keywords so that it doesnt store any garbage from 
+            the it from the episode (task) that the system handles
+        '''
+        content = memory.get("content", "").lower()
+        topic = memory.get("topic", "").lower()
+        memory_type = memory.get("memory_type", "")
+
+        rejected_topics = {
+            "file_system_structure",
+            "tool_usage",
+            "workspace_state",
+            "current_file",
+            "temporary_file",
+            "age_preference"
+        }
+
+        rejected_phrases = [
+            "file named",
+            "located in their current directory",
+            "used to read",
+            "prefers using tools",
+            "current directory",
+            "workspace",
+            "hello.txt"
+        ]
+
+        if topic in rejected_topics:
+            return True
+
+        if any(phrase in content for phrase in rejected_phrases):
+            return True
+
+        if memory_type == "user_preference":
+            preference_markers = [
+                "prefers",
+                "likes",
+                "wants",
+                "from now on",
+                "always",
+                "going forward"
+            ]
+
+            if not any(marker in content for marker in preference_markers):
+                return True
+
+        return False
