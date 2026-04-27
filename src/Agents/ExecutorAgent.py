@@ -8,7 +8,7 @@ class ExecutorAgent(Agent):
         super().__init__("executor")
         self.tool_registry = tool_registry #setting as an instance field so that sets of tools can be exchanged depending on what user enables, i.e. coord sets it
 
-    def initialise_execution_state(self, plan_response: dict, context: str = "", recent_messages: list[dict] = None) -> dict:
+    def initialise_execution_state(self, plan_response: dict, context: str = "", recent_messages: list[dict] = None, user_task: str = "") -> dict:
         ''' 
             Initialisting an execution state so that the coordinator would be the one which keeps track of the steps running,
             this is done so that it interleaves with the executor and if any runnable steps are to have permission it asks the user before it executes the
@@ -24,7 +24,8 @@ class ExecutorAgent(Agent):
             "approved_actions": set(),
             "rollback_log": [],
             "context": context,
-            "recent_messages": recent_messages or [] #Depending on whether it is falsy or not
+            "recent_messages": recent_messages or [], #Depending on whether it is falsy or not
+            "user_task": user_task #pinned literal user task; executor injects it into LLM prompts to stop the planner from drifting
         }
     
     def is_execution_complete(self, execution_state: dict) -> bool:
@@ -196,6 +197,25 @@ class ExecutorAgent(Agent):
         if tool_name == "direct_response":
             resolved_args["context"] = execution_state.get("context", "")
             resolved_args["recent_messages"] = execution_state.get("recent_messages", [])
+
+            #Force the user's actual task back into the prompt so the planner cannot
+            #silently swap the request (e.g. "snake game" -> "random numbers").
+            user_task = execution_state.get("user_task", "")
+            planner_prompt = resolved_args.get("prompt", "")
+            if user_task:
+                resolved_args["prompt"] = (
+                    f"User task (authoritative):\n{user_task}\n\n"
+                    f"Planner instruction:\n{planner_prompt}"
+                )
+
+        if tool_name == "generate_content":
+            user_task = execution_state.get("user_task", "")
+            planner_prompt = resolved_args.get("prompt", "")
+            if user_task:
+                resolved_args["prompt"] = (
+                    f"User task (authoritative):\n{user_task}\n\n"
+                    f"Planner instruction (use only to refine, do not contradict the user task):\n{planner_prompt}"
+                )
 
         return resolved_args
     

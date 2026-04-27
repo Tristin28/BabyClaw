@@ -432,4 +432,25 @@ PLANNER_TOOL_DESCRIPTIONS = [
         },
         returns={"type": "string"}
     ),
+
+    make_tool_description(
+        name="generate_content",
+        description=(
+            "Generate raw text or code content using the LLM for chaining into create_file, write_file, or append_file. "
+            "Use this when the user asks to create or save generated material to a file: code, scripts, essays, configs, drafts, READMEs. "
+            "Returns ONLY the raw content with no greetings, commentary, or markdown code fences, so it can be written directly into a file via content_step. "
+            "Do not use this for chat replies or explanations shown to the user; use direct_response for that. "
+            "Do not use this when the user only wants to see the answer and not save it. "
+            "Pair this with create_file/write_file using content_step to inject the generated text."
+        ),
+        args_schema={
+            "prompt": {
+                "type": "string",
+                "description": "Instruction describing what content to generate. Be specific about language, format, and length when relevant.",
+                "step_chainable": False,
+                "required": True
+            }
+        },
+        returns={"type": "string"}
+    ),
 ]

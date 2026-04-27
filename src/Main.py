@@ -255,7 +255,7 @@ def build_system():
 
     debug_paths()
 
-    llm_client = OllamaClient()
+    llm_client = OllamaClient(model="qwen2.5-coder:7b")
 
     db_manager = DatabaseManager(
         db_path=str(DB_PATH)

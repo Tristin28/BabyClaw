@@ -28,8 +28,11 @@ class VectorRepository():
     def retrieve_relevant_memory(self, task: str, k: int) -> dict:
         return self.collection.query(query_texts=[task], n_results=k)
 
-    def get_all_memories(self) -> dict:
+    def get_facts_by_type(self, memory_type: str, max_items: int = 20) -> dict:
         '''
-            Debug/helper method used to visually confirm that memories are actually being stored inside the vector database.
+            Filter-based fetch (not similarity-based). Used to always pull stable
+            user_facts/preferences regardless of how the current task is phrased,
+            because semantic search misses them when the query is unrelated text
+            like "summarise hello.txt and email it".
         '''
-        return self.collection.get()
+        return self.collection.get(where={"memory_type": memory_type}, limit=max_items)

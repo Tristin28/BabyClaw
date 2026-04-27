@@ -16,7 +16,24 @@ class Coordinator():
     REVIEWER_STEP = 3
     MEMORY_STEP = 4
     FINAL_STEP = 5
-     
+
+    #Tools whose path argument should be pinned to the user-provided filename.
+    PATH_PINNED_TOOLS = {"create_file", "write_file", "append_file", "delete_file"}
+
+    #Phrases that signal a file extension when the user did not type one.
+    MODE_EXTENSIONS = {
+        "text mode": "txt",
+        "plain text": "txt",
+        "as text": "txt",
+        "txt format": "txt",
+        "python": "py",
+        "py mode": "py",
+        "markdown": "md",
+        "md mode": "md",
+        "json": "json",
+        "csv": "csv",
+    }
+
     def __init__(self,planner:PlannerAgent, executor:ExecutorAgent, reviewer:ReviewerAgent, memory:MemoryAgent, 
                  planner_tool_descriptions: list[dict], tool_registry: dict, llm_client: OllamaClient):
         self.planner = planner
@@ -213,26 +230,26 @@ class Coordinator():
         '''
             This method is called when reviewer rejects the execution result. It gives the planner the reviewer issues so it can create a better plan.
         '''
+        #Keep the replan instruction small. Dumping the entire previous trace
+        #made the small planner model invent extra steps (e.g. delete_file).
+        issues_text = "; ".join(reviewer_response.get("issues", [])) or "no specific issues reported"
+
+        revised_task = (
+            f"{user_task}\n\n"
+            f"Previous attempt was rejected because: {issues_text}.\n"
+            f"Plan again from scratch for the original task above. "
+            f"Use *_step to chain values between steps. "
+            f"Do not add steps unrelated to the original task. "
+            f"Do not delete or read files the user did not mention."
+        )
+
         context = self.memory.get_relevant_memory(task=user_task, k=5)
         k_recent_messages = self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
 
-        replan_context = self.build_replan_context(
-            original_context=context,
-            previous_plan=plan_response,
-            executor_response=executor_response,
-            reviewer_response=reviewer_response
-        )
-
-        planner_input = self.build_planner_input(
-            user_task=user_task,
-            context=replan_context,
-            k_recent_messages=k_recent_messages,
-            conversation_id=conversation_id,
-            step_index=self.PLANNER_STEP
-        )
+        planner_input = self.build_planner_input(user_task=revised_task, context=context, k_recent_messages=k_recent_messages,
+                                                conversation_id=conversation_id, step_index=self.PLANNER_STEP)
 
         planner_msg = self.try_plan(planner_input=planner_input)
-
         if planner_msg.status == "failed":
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP, 
                                               review_summary="Replanning failed after reviewer rejected the result.", 
@@ -241,27 +258,9 @@ class Coordinator():
                                               details=planner_msg.response
                                               )
 
-        new_plan_response = planner_msg.response
 
-        plan_scope_error = self.validate_plan_tool_scope(
-            user_task=user_task,
-            plan_response=new_plan_response
-        )
-
-        if plan_scope_error:
-            return self.build_failure_message(
-                conversation_id=conversation_id,
-                step_index=self.FINAL_STEP,
-                review_summary="Replanning produced a plan outside the task scope.",
-                issues=[plan_scope_error],
-                execution_response=executor_response,
-                details={
-                    "user_task": user_task,
-                    "plan_response": new_plan_response
-                }
-            )
-
-        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response, context=context, recent_messages=k_recent_messages)
+        new_plan_response = self.pin_user_filenames(planner_msg.response, user_task)
+        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response, context=context, recent_messages=k_recent_messages, user_task=user_task)
         if approved_actions:
             execution_state["approved_actions"] = approved_actions
 
@@ -270,7 +269,7 @@ class Coordinator():
 
         if executor_msg.status == "waiting":
             return executor_msg
-        
+
         if executor_msg.status == "failed":
             execution_state = executor_msg.response.get("execution_state", {})
             rollback_results = self.rollback_execution(executor_response=execution_state)
@@ -387,7 +386,7 @@ class Coordinator():
                                               error=planner_msg.response.get("error", "Unknown planning error."),
                                               details=planner_msg.response) 
         
-        plan_response = planner_msg.response
+        plan_response = self.pin_user_filenames(planner_msg.response, user_task)
 
         plan_scope_error = self.validate_plan_tool_scope(
             user_task=user_task,
@@ -405,7 +404,7 @@ class Coordinator():
                                             )
 
         #sending the respective accepted response to the user so that it knows what it will do and user will have to verify  
-        execution_state = self.executor.initialise_execution_state(plan_response=plan_response, context=context, recent_messages=k_recent_messages)
+        execution_state = self.executor.initialise_execution_state(plan_response=plan_response, context=context, recent_messages=k_recent_messages, user_task=user_task)
         executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state, start_step_index=self.EXECUTOR_STEP, 
                                        user_task=user_task, plan_response=plan_response)
 
@@ -433,7 +432,7 @@ class Coordinator():
         '''
 
         executor_response = executor_msg.response #will only contain messages with .status == "completed"
-        
+
         reviewer_msg = self.reviewer.run(conversation_id=conversation_id,step_index=self.REVIEWER_STEP, user_task = user_task, execution_response = executor_response)
         self.memory.store_message(message=reviewer_msg)
 
@@ -441,23 +440,26 @@ class Coordinator():
         accepted = reviewer_msg.response.get("accepted", False)
 
         if not accepted:
-            rollback_results = [] #Setting it to empty for when reviewer rejects outcome because since it is stochasstic it might be wrong.
+            #Reviewer rejected the work, so any side-effects (created/modified/deleted files)
+            #must be undone here. Previously rollback_results was hardcoded to [] and the
+            #workspace was left dirty after a rejection.
+            rollback_results = self.rollback_execution(executor_response=executor_response)
+
             issues = reviewer_response.get("issues", [])
             self.memory.store_message(message=Message(conversation_id=reviewer_msg.conversation_id, step_index=reviewer_msg.step_index, 
                                                     sender="memory", receiver="coordinator", target_agent=None, message_type="memory_store", 
                                                     status="completed", response={"stored": False, "reason": "Reviewer did not accept workflow"},
                                                     visibility="internal"))
-            
+
             if not review_retry_used:
                 approved_actions = set(executor_response.get("approved_actions", []))
                 return self.replan_after_review_rejection(conversation_id=conversation_id, user_task=user_task, plan_response=plan_response,
                                                         executor_response=executor_response, reviewer_response=reviewer_response, approved_actions=approved_actions)
-            
-            
+
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP, 
                                             review_summary=reviewer_response.get("review_summary", "Reviewer rejected execution."),
                                             issues=issues,execution_response=executor_response, rollback_results=rollback_results, details=reviewer_response)
-        
+
         episode_summary = self.create_epsiodic_summary(user_task=user_task, planner_response=plan_response,
                                                        executor_response=executor_response, reviewer_response= reviewer_response)
 
@@ -868,3 +870,72 @@ class Coordinator():
                 })
 
         return rollback_results
+    
+    
+    def extract_user_filename(self, user_task: str) -> str | None:
+        '''
+            Pulls the literal filename out of the user task. Handles:
+              - "create me a file called Bye"        -> "Bye"
+              - "called work.txt"                    -> "work.txt"
+              - "named report.md"                    -> "report.md"
+              - "in text mode" / "as txt"            -> appends .txt to bare name
+            Returns None when no filename can be confidently extracted.
+        '''
+        import re
+
+        text = user_task.strip()
+
+        match = re.search(
+            r"\b(?:called|named)\s+([A-Za-z0-9_\-/.]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        if not match:
+            #Bare "filename.ext" anywhere in the task.
+            match = re.search(r"\b([A-Za-z0-9_\-/]+\.[A-Za-z0-9]{1,6})\b", text)
+
+        if not match:
+            return None
+
+        candidate = match.group(1).strip(".,'\"")
+
+        #If candidate has no extension, look for a "mode" phrase to attach one.
+        if "." not in candidate:
+            lower_text = text.lower()
+            for phrase, ext in self.MODE_EXTENSIONS.items():
+                if phrase in lower_text:
+                    candidate = f"{candidate}.{ext}"
+                    break
+
+        return candidate
+
+    def pin_user_filenames(self, plan_response: dict, user_task: str) -> dict:
+        '''
+            Deterministically overwrites planner-provided paths with the literal
+            filename extracted from the user task. Stops the planner from
+            substituting names like "file_to_create" or "empty_file.txt".
+        '''
+        pinned_name = self.extract_user_filename(user_task)
+        if not pinned_name:
+            return plan_response
+
+        for step in plan_response.get("steps", []):
+            if step.get("tool") not in self.PATH_PINNED_TOOLS:
+                continue
+
+            args = step.get("args", {})
+            current = args.get("path", "")
+
+            #Strip markdown-link syntax the planner sometimes wraps filenames in.
+            if isinstance(current, str):
+                import re
+                md = re.match(r"^\s*\[([^\]]+)\]\([^)]*\)\s*$", current)
+                if md:
+                    current = md.group(1)
+
+            if current != pinned_name:
+                args["path"] = pinned_name
+                step["args"] = args
+
+        return plan_response

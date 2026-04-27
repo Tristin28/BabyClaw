@@ -65,6 +65,33 @@ class MemoryAgent(Agent):
             between the entire components (agents + user) of the system
         '''
         return self.sql_repo.get_recent_messages(conversation_id=conversation_id,k=k)
+
+    def get_pinned_facts_text(self) -> str:
+        '''
+            Always-on context: pulls every stored user_fact and user_preference
+            and dedupes by topic (newest wins). Lets the planner/responder see
+            the user's name/friend/etc. on tasks where similarity search would
+            never surface them.
+        '''
+        sections = []
+
+        for memory_type in ("user_fact", "user_preference"):
+            results = self.vector_repo.get_facts_by_type(memory_type=memory_type, max_items=20)
+            docs = results.get("documents") or []
+            metas = results.get("metadatas") or []
+
+            by_topic = {}
+            for fact, meta in zip(docs, metas):
+                topic = (meta or {}).get("topic", "")
+                ts = (meta or {}).get("timestamp", "")
+                if topic not in by_topic or ts > by_topic[topic][1]:
+                    by_topic[topic] = (fact, ts)
+
+            if by_topic:
+                lines = "\n".join(f"- {fact}" for fact, _ in by_topic.values())
+                sections.append(f"{memory_type}:\n{lines}")
+
+        return "\n\n".join(sections)
     
     def get_recent_conversation_messages(self,conversation_id: int, k: int = 5):
         '''
@@ -122,30 +149,33 @@ class MemoryAgent(Agent):
         '''
             Method will query a vector db in order to return content which is relative to the respective task that is being passed
         '''
-        results =  self.vector_repo.retrieve_relevant_memory(task=task, k=k)
+        results = self.vector_repo.retrieve_relevant_memory(task=task, k=k)
 
-        #Guarding against an empty collection or a query that returned no rows,
-        #since chroma will hand back {"documents": [[]], "distances": [[]], ...}
-        #on a brand new database and indexing [0] on an empty inner list crashes downstream.
+        #Guarding against an empty collection or a query that returned no rows.
         documents_outer = results.get("documents") or []
-        if not documents_outer or not documents_outer[0]:
-            return ""
 
-        #Applying threshold filtering because even though 10 documents would be retrieved it wouldnt necessarly mean they are actually related to the task sent
-        retrieved_memories = results["documents"][0] #returning the k most relevant chunks to the query sent, where documents is a key in the returned dict that stores [[strings]]
-        distances = results["distances"][0] #respective distances from query to those chunks, where the distances key is stores [[integers]]
-        meta_data = results["metadatas"][0] #stores [[dict]]
+        relevance_lines = []
+        if documents_outer and documents_outer[0]:
+            #Applying threshold filtering because even though k documents would be retrieved it wouldnt necessarly mean they are actually related to the task sent
+            retrieved_memories = results["documents"][0] #returning the k most relevant chunks to the query sent
+            distances = results["distances"][0] #respective distances from query to those chunks
+            meta_data = results["metadatas"][0] #stores [[dict]]
 
-        candidates = [
-            (fact, meta)
-            for fact, dist, meta in zip(retrieved_memories, distances, meta_data)
-            if dist <= MemoryAgent.RELEVANCE_THRESHOLD
-        ]
+            candidates = [(fact, meta) for fact, dist, meta in zip(retrieved_memories, distances, meta_data) if dist <= MemoryAgent.RELEVANCE_THRESHOLD]
 
-        #retrieving the respective facts which do not conflict by applying the respective method
-        filtered_candidates = self.resolve_conflicts(candidates=candidates)
+            #retrieving the respective facts which do not conflict by applying the respective method
+            filtered_candidates = self.resolve_conflicts(candidates=candidates)
+            relevance_lines = [fact for fact, _ in filtered_candidates]
 
-        return "\n".join(fact for fact, _ in filtered_candidates)
+        pinned = self.get_pinned_facts_text()
+
+        sections = []
+        if pinned:
+            sections.append(f"Known about the user (always include):\n{pinned}")
+        if relevance_lines:
+            sections.append("Task-relevant memory:\n" + "\n".join(relevance_lines))
+
+        return "\n\n".join(sections)
     
     def resolve_conflicts(self, candidates):
         best_by_topic = {} #dictionary which stores the most relevant candidates based on their respective memory_type

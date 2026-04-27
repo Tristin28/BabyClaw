@@ -101,3 +101,52 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
         raise ValueError("direct_response produced an empty response")
 
     return response
+
+def generate_content(llm_client: OllamaClient, prompt: str) -> str:
+    """
+        Generates raw content (code, prose, config, JSON, etc.) for a later step
+        such as create_file or write_file via content_step.
+
+        Different from direct_response:
+            - direct_response is for chat-style answers shown to the user.
+            - generate_content returns ONLY the raw content with no greetings,
+              no commentary, and no markdown code fences, so it can be written
+              straight into a file.
+    """
+    if not isinstance(prompt, str):
+        raise TypeError("generate_content expected a string prompt")
+
+    if prompt.strip() == "":
+        raise ValueError("generate_content prompt cannot be empty")
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a raw content generator for a tool pipeline.\n"
+                "Hard rules:\n"
+                "1. Output ONLY the requested content, exactly as it should appear inside a file.\n"
+                "2. No greetings, no apologies, no explanations, no commentary.\n"
+                "3. No markdown fences such as ```python or ``` around the content.\n"
+                "4. If asked for code, output only the code.\n"
+                "5. If asked for prose, output only the prose."
+            )
+        },
+        {
+            "role": "user",
+            "content": prompt.strip()
+        }
+    ]
+
+    response = llm_client.invoke_text(messages=messages, stream=False).strip()
+
+    #Defensive: strip a leading/trailing markdown fence if the model added one anyway.
+    if response.startswith("```"):
+        response = response.split("\n", 1)[1] if "\n" in response else ""
+    if response.endswith("```"):
+        response = response.rsplit("```", 1)[0].rstrip()
+
+    if response == "":
+        raise ValueError("generate_content produced an empty response")
+
+    return response

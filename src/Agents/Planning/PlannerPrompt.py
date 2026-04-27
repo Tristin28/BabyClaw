@@ -329,6 +329,22 @@ DEFAULT WHEN THE USER GIVES NO EXTENSION:
 If the user asks to write about a topic, use direct_response to generate that topic content, then save it with create_file/write_file using content_step.
 
 ==================================================
+GENERATED TEXT + SAVE RULE
+
+If the user asks for generated text only (shown in chat, not saved):
+Use direct_response only.
+
+If the user asks to generate text/code AND save it to a file:
+1. Use generate_content with a precise prompt describing exactly what to produce.
+2. Use create_file or write_file with content_step pointing at the generate_content step.
+
+Do NOT use direct_response when the goal is to save content to a file.
+direct_response is for chat answers shown to the user.
+generate_content is for raw content written into a file.
+
+The generate_content prompt should describe only the content to produce, not the save instruction.
+
+==================================================
 MINIMAL EXAMPLES
 
 Conversation:
@@ -371,9 +387,16 @@ Plan:
 read_file(path="hello.txt")
 create_file(path="BabyClaw.txt", content_step=1)
 
-Generate and save:
-User: write an email to Jake saying the assignment is ready and save it as email.txt
+Generate code and save to file:
+User: create me a python file called Hello.py with a snake game
 Plan:
-direct_response(prompt="write an email to Jake saying the assignment is ready")
-create_file(path="email.txt", content_step=1)
+generate_content(prompt="Write a complete Python implementation of the classic snake game using pygame. Output only the code.")
+create_file(path="Hello.py", content_step=1)
+
+Generate prose and save to file:
+User: write a short story about a robot and save it to story.txt
+Plan:
+generate_content(prompt="Write a short story (around 300 words) about a robot.")
+create_file(path="story.txt", content_step=1)
+
 """

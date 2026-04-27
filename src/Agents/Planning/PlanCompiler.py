@@ -65,6 +65,76 @@ class PlanCompiler:
 
         return steps
     
+    def repair_placeholder_chains(self, steps: list[dict]):
+        '''
+            When the planner emits placeholders like "{{summary}}", "[Content of X]"
+            or "<placeholder>" in a chainable arg, do not fail. Instead, find the
+            most recent earlier step that produces a string and rewrite the arg as
+            "<arg>_step": <that_step_id>. Only fall back to raising when no candidate
+            exists or the arg is not step-chainable.
+        '''
+        import re
+        placeholder_patterns = [
+            re.compile(r"\{\{.*?\}\}"),
+            re.compile(r"\[[A-Z][^\]]*\]"),
+            re.compile(r"<[A-Za-z][^>]*>"),
+        ]
+
+        #Tools whose return value is a string usable as content/text/prompt input.
+        string_producing_tools = {
+            "read_file",
+            "summarise_txt",
+            "direct_response",
+            "generate_content",
+            "find_file",
+            "find_file_recursive",
+            "replace_text",
+        }
+
+        for step in steps:
+            step_id = step["id"]
+            tool_name = step["tool"]
+            args = step.get("args", {})
+            args_schema = self.tool_args_schema.get(tool_name, {})
+
+            for arg_name in list(args.keys()):
+                arg_value = args[arg_name]
+
+                if not isinstance(arg_value, str):
+                    continue
+
+                if not any(pattern.search(arg_value) for pattern in placeholder_patterns):
+                    continue
+
+                arg_def = args_schema.get(arg_name)
+
+                if not arg_def or not arg_def.get("step_chainable"):
+                    raise ValueError(
+                        f"Step {step_id} tool '{tool_name}' arg '{arg_name}' contains a placeholder "
+                        f"and is not step-chainable. Provide a real value."
+                    )
+
+                #Pick the most recent earlier step that produces a string.
+                candidate_id = None
+                for earlier in steps:
+                    if earlier["id"] >= step_id:
+                        break
+                    if earlier["tool"] in string_producing_tools:
+                        candidate_id = earlier["id"]
+
+                if candidate_id is None:
+                    raise ValueError(
+                        f"Step {step_id} tool '{tool_name}' arg '{arg_name}' contains a placeholder "
+                        f"but no earlier step produces a string to chain from. "
+                        f"Add a generate_content/read_file/summarise_txt step before this one."
+                    )
+
+                #Rewrite: drop the placeholder direct arg, insert a step reference.
+                del args[arg_name]
+                args[f"{arg_name}_step"] = candidate_id
+
+            step["args"] = args
+                    
     def compile(self, raw_plan: dict) -> dict:
         self.validate_top_level_schema(raw_plan)
 
@@ -72,8 +142,8 @@ class PlanCompiler:
         normalised_steps = self.remap_step_arguments(normalised_steps)
 
         normalised_steps = self.apply_safe_defaults(normalised_steps)
+        self.repair_placeholder_chains(normalised_steps)
 
-        self.reject_fake_step_strings(normalised_steps)
         self.validate_step_args_are_allowed(normalised_steps)
         self.validate_required_args_present(normalised_steps)
 
