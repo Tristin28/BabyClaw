@@ -227,28 +227,29 @@ class Coordinator():
 
         return None
 
-    def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict, 
+    def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict,
                                       executor_response: dict,reviewer_response: dict, approved_actions: set) -> Message:
         '''
             This method is called when reviewer rejects the execution result. It gives the planner the reviewer issues so it can create a better plan.
+            IMPORTANT: user_task must stay pure (the original user request). Rejection feedback goes into context only,
+            otherwise the workspace heuristic would see workspace-related words in the rejection text and flip incorrectly.
         '''
-        #Keep the replan instruction small. Dumping the entire previous trace
-        #made the small planner model invent extra steps (e.g. delete_file).
-        issues_text = "; ".join(reviewer_response.get("issues", [])) or "no specific issues reported"
+        issues_text = "; ".join(reviewer_response.get("issues", [])) or "No specific issues provided."
 
-        revised_task = (
-            f"{user_task}\n\n"
+        replan_feedback = (
             f"Previous attempt was rejected because: {issues_text}.\n"
-            f"Plan again from scratch for the original task above. "
+            f"Plan again from scratch for the original user task. "
             f"Use *_step to chain values between steps. "
             f"Do not add steps unrelated to the original task. "
             f"Do not delete or read files the user did not mention."
         )
 
         context = self.memory.get_relevant_memory(task=user_task, k=5)
+        context = f"{context}\n\n{replan_feedback}" if context else replan_feedback
+
         k_recent_messages = self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
 
-        planner_input = self.build_planner_input(user_task=revised_task, context=context, k_recent_messages=k_recent_messages,
+        planner_input = self.build_planner_input(user_task=user_task, context=context, k_recent_messages=k_recent_messages,
                                                 conversation_id=conversation_id, step_index=self.PLANNER_STEP)
 
         planner_msg = self.try_plan(planner_input=planner_input)
@@ -261,8 +262,8 @@ class Coordinator():
                                               )
 
 
-        new_plan_response = self.pin_user_filenames(planner_msg.response, user_task)
-        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response, context=context, recent_messages=k_recent_messages, user_task=user_task)
+        new_plan_response = planner_msg.response
+        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response, context=context, recent_messages=k_recent_messages)
         if approved_actions:
             execution_state["approved_actions"] = approved_actions
 
@@ -271,7 +272,7 @@ class Coordinator():
 
         if executor_msg.status == "waiting":
             return executor_msg
-
+        
         if executor_msg.status == "failed":
             execution_state = executor_msg.response.get("execution_state", {})
             rollback_results = self.rollback_execution(executor_response=execution_state)
@@ -297,17 +298,17 @@ class Coordinator():
         direct_outputs = [step.get("result") for step in trace if step.get("tool") == "direct_response" and step.get("status") == "completed" and step.get("result")]
 
         display_tools = {"read_file", "list_dir", "find_file", "summarise_txt", "create_file", "write_file", "append_file", "delete_file", 
-                         "search_text", "replace_text","create_dir","delete_dir", "move_path", "copy_path","find_file_recursive"}
+                         "search_text", "replace_text","create_dir","delete_dir", "move_path", "copy_path","find_file_recursive", "list_tree"}
 
         display_outputs = [step.get("result") for step in trace if step.get("tool") in display_tools and step.get("status") == "completed" 
                            and step.get("result") is not None]
         
         display_result = direct_outputs[-1] if direct_outputs else (display_outputs[-1] if display_outputs else None)
 
-        if direct_outputs:
+        if display_result is not None:
             self.memory.store_message(Message(conversation_id=conversation_id, step_index=step_index, sender="assistant", receiver="user", 
                                             target_agent=None, message_type="assistant_message", status="completed", 
-                                            response={"content": direct_outputs[-1]}, visibility="external"
+                                            response={"content": str(display_result)}, visibility="external"
                                             )
                                     )
 
@@ -761,6 +762,17 @@ class Coordinator():
         """
         text = user_task.lower()
 
+        normal_writing_phrases = [
+        "write me a letter",
+        "write a letter",
+        "write me an email",
+        "write an email",
+        "write me a message",
+        "write a message",
+        "draft a letter",
+        "draft an email",
+        ]
+
         file_keywords = [
             "file",
             "folder",
@@ -841,6 +853,10 @@ class Coordinator():
             ".docx",
             ".pdf",
         ]
+
+        if any(phrase in text for phrase in normal_writing_phrases):
+            if not any(word in text for word in file_keywords):
+                return False
 
         if any(ext in text for ext in file_extensions):
             return True

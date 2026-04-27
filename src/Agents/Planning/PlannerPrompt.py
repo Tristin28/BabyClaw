@@ -219,10 +219,6 @@ GENERATED TEXT + SAVE RULE
 If the user asks for generated text only:
 Use direct_response only.
 
-If the user asks to generate text and save/write it to a file:
-1. Use direct_response to generate the text.
-2. Use create_file or write_file with content_step.
-
 The direct_response prompt should contain only the generation instruction, not the save instruction.
 
 ==================================================
@@ -327,22 +323,6 @@ DEFAULT WHEN THE USER GIVES NO EXTENSION:
 - Example: user says "create a file called work" -> create_file(path="work", content="").
 
 If the user asks to write about a topic, use direct_response to generate that topic content, then save it with create_file/write_file using content_step.
-
-==================================================
-GENERATED TEXT + SAVE RULE
-
-If the user asks for generated text only (shown in chat, not saved):
-Use direct_response only.
-
-If the user asks to generate text/code AND save it to a file:
-1. Use generate_content with a precise prompt describing exactly what to produce.
-2. Use create_file or write_file with content_step pointing at the generate_content step.
-
-Do NOT use direct_response when the goal is to save content to a file.
-direct_response is for chat answers shown to the user.
-generate_content is for raw content written into a file.
-
-The generate_content prompt should describe only the content to produce, not the save instruction.
 
 ==================================================
 MINIMAL EXAMPLES

@@ -109,7 +109,8 @@ PLANNER_TOOL_DESCRIPTIONS = [
             "The content argument is always required by the tool, but it may be an empty string. "
             "If the user says what to put inside the file, use that text as content. "
             "If the user asks to create a file but does not say what should be inside it, use content=\"\". "
-            "If the content must be generated first, use direct_response first and then use content_step. "
+            "If the content must be generated first, use generate_content first and then create_file with content_step. "
+            "Do not use direct_response for file content."
             "Do not use this tool to overwrite or update an existing file; use write_file for that. "
             "Returns a confirmation string."
         ),

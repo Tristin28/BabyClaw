@@ -42,7 +42,7 @@ def build_system():
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
-    llm_client = OllamaClient()
+    llm_client = OllamaClient(model="qwen2.5-coder:7b")
 
     db_manager = DatabaseManager(db_path=str(DB_PATH))
     db_manager.init_db()

@@ -221,6 +221,19 @@ class MemoryAgent(Agent):
 
                                 Only store information that the user literally stated in the user task.
 
+                                CRITICAL RULES FOR USER FACTS:
+                                - A noun on its own is USELESS. Always store the relationship or role with the name.
+                                -   Example: WRONG: content="Jake", topic=friend_name
+                                             RIGHT: content="Jake is the user's friend", topic=friend_jake
+                                             WRONG: content="John", topic=professor
+                                             RIGHT: content="John is the user's professor", topic=professor_john
+
+                                - If the user says "my friend <NAME>", store: "<NAME> is the user's friend".
+                                - If the user says "my professor <NAME>", store: "<NAME> is the user's professor".
+                                - If you cannot identify the relationship/role from the user's text, do NOT store the name.
+
+                                The content field must be a complete sentence that makes sense on its own when retrieved months later.
+
                                 Allowed memory types:
 
                                 1. user_fact
