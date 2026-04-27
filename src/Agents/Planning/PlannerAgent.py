@@ -3,60 +3,49 @@ from src.Agents.BaseAgent import Agent
 from src.message import Message
 from src.Agents.Planning.PlanCompiler import PlanCompiler
 from src.Agents.Planning.PlannerPrompt import PLANNER_SYSTEM_PROMPT
+from src.tools.utils import WorkspaceConfig
 
 class PlannerAgent(Agent):
     PLANNER_SYSTEM_PROMPT = PLANNER_SYSTEM_PROMPT
-    def __init__(self, llm_client:OllamaClient):
+    def __init__(self, llm_client:OllamaClient, workspace_config: WorkspaceConfig):
         self.llm_client = llm_client
         super().__init__("planner") #setting the name field for when sending the message
+        self.workspace_config = workspace_config
 
     def build_messages(self, planner_input: dict) -> list[dict]:
-        '''
-            This method will build the prompt into a list of messages so that it is passed onto the LLM through the messages parameter of ollama's chat method
-            which is a list of dictionaries, where it is seperated by roles because it makes the llm understand better hence it improves planning reliability
-        '''
-        messages = [
-            {
-                #Agent's personality and instructions - system prompt
-                "role": "system",
-                "content": PlannerAgent.PLANNER_SYSTEM_PROMPT
-            }
-        ]
+        messages = [{"role": "system", "content": PlannerAgent.PLANNER_SYSTEM_PROMPT}]
 
-        recent_conversation_text = "\n".join(
-            f"{msg['sender']}: {msg['content']}"
-            for msg in planner_input["k_recent_messages"]
-            if msg.get("sender") in {"user", "assistant"} and msg.get("content")
-        )
+        sections = [f"Current task to plan:\n{planner_input['task']}"]
 
-        messages.append({
-                #Describng what messages being sent by the user are and also any context 
-                #(Relevanat memory) about it or what the user is asking  - this depends on memory retrieval and task
-                #And also defining tools in this respective role because they are part of the current task environment
-                "role": "user",
-                "content": f"""
-                            Current task to plan:
-                            {planner_input["task"]}
+        route = planner_input.get("route", {})
+        if route:
+            sections.append(
+                f"COORDINATOR ROUTE (authoritative scope - do not exceed):\n"
+                f"task_type = {route.get('task_type')}\n"
+                f"memory_mode = {route.get('memory_mode')}\n"
+                f"use_recent_messages = {route.get('use_recent_messages')}\n"
+                f"use_workspace = {route.get('use_workspace')}\n\n"
+                f"The Coordinator already selected the only tools and context available. "
+                f"You must stay inside this route. Use only the available tools shown."
+            )
 
-                            Important:
-                            Only create a plan for the current task above.
-                            Do not execute, answer, or re-plan old conversation messages.
-                            The recent conversation below is only background context.
+        if planner_input["k_recent_messages"]:
+            recent_text = "\n".join(
+                f"{msg['sender']}: {msg['content']}"
+                for msg in planner_input["k_recent_messages"]
+                if msg.get("sender") in {"user", "assistant"} and msg.get("content")
+            )
+            sections.append(f"Recent conversation (background only):\n{recent_text}")
 
-                            Recent conversation:
-                            {recent_conversation_text}
+        if planner_input["context"]:
+            sections.append(f"Relevant memory:\n{planner_input['context']}")
 
-                            Relevant memory: 
-                            {planner_input["context"]}
+        sections.append(f"Available tools:\n{planner_input['tools']}")
 
-                            Available tools:
-                            {planner_input["tools"]}
+        if planner_input["workspace_contents"]:
+            sections.append(f"Workspace content:\n{planner_input['workspace_contents']}")
 
-                            Workspace content:
-                            {planner_input["workspace_contents"]}
-                    """
-            })
-
+        messages.append({"role": "user", "content": "\n\n".join(sections)})
         return messages
 
     def validate_planner_input(self,planner_input:dict):
@@ -121,7 +110,7 @@ class PlannerAgent(Agent):
             schema = self.build_schema(planner_input["tools"])
             raw_response = self.llm_client.invoke_json(messages,stream=False,schema=schema)
 
-            compiler = PlanCompiler(available_tools=planner_input["tools"])
+            compiler = PlanCompiler(available_tools=planner_input["tools"], workspace_config=self.workspace_config)
             response = compiler.compile(raw_response)
 
             status = 'completed'

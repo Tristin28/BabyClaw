@@ -444,3 +444,22 @@ class MemoryAgent(Agent):
                 return True
 
         return False
+    
+    def get_memory_by_mode(self, task: str, mode: str, k: int = 5) -> str:
+        if mode == "none":
+            return ""
+
+        if mode == "pinned_only":
+            return self.get_pinned_facts_text()
+
+        if mode == "relevant_only":
+            return self.get_relevant_memory(task=task, k=k)
+
+        if mode == "full":
+            pinned = self.get_pinned_facts_text()
+            relevant = self.get_relevant_memory(task=task, k=k)
+            if pinned and relevant:
+                return f"{pinned}\n\n{relevant}"
+            return pinned or relevant
+
+        return ""

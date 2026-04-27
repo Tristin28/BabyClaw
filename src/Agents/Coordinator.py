@@ -2,10 +2,10 @@ from src.Agents.Planning.PlannerAgent import PlannerAgent
 from src.Agents.ExecutorAgent import ExecutorAgent
 from src.Agents.MemoryAgent import MemoryAgent
 from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
+from src.Agents.Routing.RouteAgent import RouteAgent
 from src.message import Message
 from src.OllamaClient import OllamaClient
 import json
-
 
 '''
     This is the agent which manages workflow, and configures the respective agents i.e. it acts like the runner method,
@@ -13,73 +13,79 @@ import json
     this is because of hallucinations)
 '''
 class Coordinator():
-    PLANNER_STEP = 1
-    EXECUTOR_STEP = 2
-    REVIEWER_STEP = 3
-    MEMORY_STEP = 4
-    FINAL_STEP = 5
+    ROUTER_STEP = 1
+    PLANNER_STEP = 2
+    EXECUTOR_STEP = 3
+    REVIEWER_STEP = 4
+    MEMORY_STEP = 5
+    FINAL_STEP = 6
 
-    #Tools whose path argument should be pinned to the user-provided filename.
-    PATH_PINNED_TOOLS = {"create_file", "write_file", "append_file", "delete_file"}
+    DIRECT_RESPONSE_TOOLS = {"direct_response"}
 
-    #Phrases that signal a file extension when the user did not type one.
-    MODE_EXTENSIONS = {
-        "text mode": "txt",
-        "plain text": "txt",
-        "as text": "txt",
-        "txt format": "txt",
-        "python": "py",
-        "py mode": "py",
-        "markdown": "md",
-        "md mode": "md",
-        "json": "json",
-        "csv": "csv",
+    READ_FILE_TOOLS = {
+        "read_file", "find_file", "find_file_recursive",
+        "list_dir", "list_tree", "search_text"
     }
 
-    def __init__(self,planner:PlannerAgent, executor:ExecutorAgent, reviewer:ReviewerAgent, memory:MemoryAgent, 
-                 planner_tool_descriptions: list[dict], tool_registry: dict, llm_client: OllamaClient):
+    SUMMARISE_FILE_TOOLS = {
+        "read_file", "find_file", "find_file_recursive", "summarise_txt"
+    }
+
+    MUTATION_FILE_TOOLS = {
+        "generate_content", "create_file", "write_file", "append_file",
+        "delete_file", "replace_text", "create_dir", "delete_dir",
+        "move_path", "copy_path", "find_file", "find_file_recursive",
+        "list_dir", "list_tree", "read_file", "summarise_txt", "search_text"
+    }
+
+    VALID_ROUTE_CONTRACTS = {
+        "direct_response":      {"tool_group": "direct_response_tools",  "use_workspace": False},
+        "memory_question":      {"tool_group": "direct_response_tools",  "use_workspace": False},
+        "contextual_followup":  {"tool_group": "direct_response_tools",  "use_workspace": False},
+        "workspace_read":       {"tool_group": "read_file_tools",        "use_workspace": True},
+        "workspace_summarise":  {"tool_group": "summarise_file_tools",   "use_workspace": True},
+        "workspace_mutation":   {"tool_group": "mutation_file_tools",    "use_workspace": True},
+    }
+
+    SAFE_FALLBACK_ROUTE = {
+        "task_type": "direct_response",
+        "tool_group": "direct_response_tools",
+        "memory_mode": "pinned_only",
+        "use_recent_messages": False,
+        "use_workspace": False,
+        "routing_reason": "Fallback applied because router output was invalid."
+    }
+
+    def __init__(self, planner: PlannerAgent, executor: ExecutorAgent, reviewer: ReviewerAgent,
+                 memory: MemoryAgent, router: RouteAgent, planner_tool_descriptions: list[dict], tool_registry: dict, llm_client: OllamaClient):
         self.planner = planner
         self.planner_tool_descriptions = planner_tool_descriptions
         self.executor = executor
         self.tool_registry = tool_registry
         self.reviewer = reviewer
         self.memory = memory
+        self.router = router
         self.llm_client = llm_client
 
-    def build_planner_input(self, user_task: str, context: str, k_recent_messages: list[dict], conversation_id: int, step_index: int ) -> dict:
-        '''
-            Building the respective planner input for the planner agent to handle it and process it, so that the llm would know how to reason
-        '''
-        workspace_contents = self.tool_registry["list_dir"]["func"](path=".") #giving the planner llm access to what contents the directory it operates over contains
+    def build_planner_input(self, user_task: str, route: dict, conversation_id: int, step_index: int,
+                            replan_feedback: str = "") -> dict:
+        scoped_context = self.build_scoped_context(user_task, route)
+        if replan_feedback:
+            scoped_context = f"{scoped_context}\n\n{replan_feedback}" if scoped_context else replan_feedback
 
-        # Important:
-        # user_task must always be the original current user task as a string.
-        # Context, recent messages, and workspace contents are only extra support.
-        is_workspace_task = self.is_likely_workspace_task(user_task)
-
-        available_tools = self.planner_tool_descriptions
-
-        if not is_workspace_task:
-            available_tools = [
-                tool for tool in self.planner_tool_descriptions
-                if tool["name"] == "direct_response"
-            ]
-
-        print("\n[DEBUG - PLANNER INPUT]")
-        print("user_task:", user_task)
-        print("is_likely_workspace_task:", is_workspace_task)
-        print("available_tools:", [tool["name"] for tool in available_tools])
-        print("context:", context)
-        print("[/DEBUG - PLANNER INPUT]\n")
+        scoped_recent_messages = self.build_scoped_recent_messages(conversation_id, route)
+        selected_tools = self.select_tools_for_route(route)
+        scoped_workspace_contents = self.build_scoped_workspace_contents(route)
 
         return {
             "task": user_task,
-            "context": context,
-            "k_recent_messages": k_recent_messages,
-            "tools": available_tools,
+            "context": scoped_context,
+            "k_recent_messages": scoped_recent_messages,
+            "tools": selected_tools,
+            "workspace_contents": scoped_workspace_contents,
+            "route": route,
             "conversation_id": conversation_id,
             "step_index": step_index,
-            "workspace_contents": workspace_contents
         }
 
     def try_plan(self,planner_input: dict, max_attempts: int = 3) -> Message:
@@ -184,55 +190,12 @@ class Coordinator():
                 Only use this replan context to avoid repeating the same mistake.
                 """
 
-    def validate_plan_tool_scope(self, user_task: str, plan_response: dict) -> str | None:
-        '''
-            Checks that a non-workspace task did not accidentally receive workspace tools.
-            This protects the system from Planner mistakes before permission/execution.
-        '''
-        if self.is_likely_workspace_task(user_task):
-            return None
-
-        workspace_tools = {
-            "read_file",
-            "list_dir",
-            "find_file",
-            "summarise_txt",
-            "create_file",
-            "write_file",
-            "append_file",
-            "delete_file",
-            "search_text",
-            "replace_text",
-            "list_tree",
-            "find_file_recursive",
-            "create_dir",
-            "delete_dir",
-            "move_path",
-            "copy_path"
-        }
-
-        used_workspace_tools = []
-
-        for step in plan_response.get("steps", []):
-            tool_name = step.get("tool")
-
-            if tool_name in workspace_tools:
-                used_workspace_tools.append(tool_name)
-
-        if used_workspace_tools:
-            return (
-                f"Planner used workspace tools {used_workspace_tools}, "
-                f"but the current task does not ask for file or workspace operations."
-            )
-
-        return None
 
     def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict,
-                                      executor_response: dict,reviewer_response: dict, approved_actions: set) -> Message:
+                                      executor_response: dict, reviewer_response: dict, approved_actions: set) -> Message:
         '''
-            This method is called when reviewer rejects the execution result. It gives the planner the reviewer issues so it can create a better plan.
-            IMPORTANT: user_task must stay pure (the original user request). Rejection feedback goes into context only,
-            otherwise the workspace heuristic would see workspace-related words in the rejection text and flip incorrectly.
+            user_task stays pure. Rejection feedback goes into context only.
+            Route is reused so replanning stays inside the same scoped environment.
         '''
         issues_text = "; ".join(reviewer_response.get("issues", [])) or "No specific issues provided."
 
@@ -244,50 +207,54 @@ class Coordinator():
             f"Do not delete or read files the user did not mention."
         )
 
-        context = self.memory.get_relevant_memory(task=user_task, k=5)
-        context = f"{context}\n\n{replan_feedback}" if context else replan_feedback
+        route = plan_response.get("route") or self.run_router(conversation_id=conversation_id, user_task=user_task)
+        route = self.validate_route(route)
 
-        k_recent_messages = self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
-
-        planner_input = self.build_planner_input(user_task=user_task, context=context, k_recent_messages=k_recent_messages,
-                                                conversation_id=conversation_id, step_index=self.PLANNER_STEP)
+        planner_input = self.build_planner_input(user_task=user_task, route=route,
+                                                 conversation_id=conversation_id, step_index=self.PLANNER_STEP,
+                                                 replan_feedback=replan_feedback)
 
         planner_msg = self.try_plan(planner_input=planner_input)
         if planner_msg.status == "failed":
-            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP, 
-                                              review_summary="Replanning failed after reviewer rejected the result.", 
+            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
+                                              review_summary="Replanning failed after reviewer rejected the result.",
                                               issues=[planner_msg.response.get("error", "Unknown replanning error.")],
-                                              execution_response=executor_response, error=planner_msg.response.get("error", "Unknown replanning error."),
-                                              details=planner_msg.response
-                                              )
-
+                                              execution_response=executor_response,
+                                              error=planner_msg.response.get("error", "Unknown replanning error."),
+                                              details=planner_msg.response)
 
         new_plan_response = planner_msg.response
-        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response, context=context, recent_messages=k_recent_messages)
+        new_plan_response["route"] = route
+        new_plan_response["workspace_before"] = self.tool_registry["list_tree"]["func"](path=".")
+
+        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response,
+                                                                    context=planner_input["context"],
+                                                                    recent_messages=planner_input["k_recent_messages"],
+                                                                    user_task=user_task)
         if approved_actions:
             execution_state["approved_actions"] = approved_actions
 
-        executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state, start_step_index=self.EXECUTOR_STEP,
-                                               user_task=user_task, plan_response=new_plan_response)
+        executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state,
+                                                start_step_index=self.EXECUTOR_STEP, user_task=user_task,
+                                                plan_response=new_plan_response)
 
         if executor_msg.status == "waiting":
             return executor_msg
-        
+
         if executor_msg.status == "failed":
             execution_state = executor_msg.response.get("execution_state", {})
             rollback_results = self.rollback_execution(executor_response=execution_state)
-
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
                                               review_summary="Execution failed during replanning.",
                                               issues=[executor_msg.response.get("error", "Unknown execution error.")],
-                                              execution_response=execution_state,
-                                              rollback_results=rollback_results,
+                                              execution_response=execution_state, rollback_results=rollback_results,
                                               error=executor_msg.response.get("error", "Unknown execution error."),
                                               details=executor_msg.response)
 
-        return self.continue_workflow(conversation_id=conversation_id, user_task=user_task, plan_response=new_plan_response, executor_msg=executor_msg, 
-                                      review_retry_used=True)
-    
+        return self.continue_workflow(conversation_id=conversation_id, user_task=user_task,
+                                      plan_response=new_plan_response, executor_msg=executor_msg, review_retry_used=True)
+
+
     '''
         Messages sent to the runner file in order for the response field to be sent to the user in order for it to know what happened with its task
     '''
@@ -365,68 +332,52 @@ class Coordinator():
 
 
     def start_workflow(self, conversation_id: int, user_task: str):
-        '''
-            Main method which will be called by the client code, as it is going to handle the entire system, i.e. core workflow logic
-            Note conv_id will be retrieved by the main entry point where the text sent by user is being handled
-        '''
-        user_message = Message(conversation_id=conversation_id, step_index=0, sender="user", receiver="coordinator", target_agent=None, message_type="user_message",
-                               status="completed", response={"content": user_task}, visibility="external")
+        user_message = Message(conversation_id=conversation_id, step_index=0, sender="user", receiver="coordinator",
+                               target_agent=None, message_type="user_message", status="completed",
+                               response={"content": user_task}, visibility="external")
         self.memory.store_message(message=user_message)
-        
 
-        context = self.memory.get_relevant_memory(task=user_task, k=5)
-        k_recent_messages = self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
+        route = self.run_router(conversation_id=conversation_id, user_task=user_task)
 
-        planner_input = self.build_planner_input(user_task = user_task, context = context, k_recent_messages = k_recent_messages, 
-                                                 conversation_id = conversation_id, step_index = self.PLANNER_STEP)
-        
+        planner_input = self.build_planner_input(user_task=user_task, route=route,
+                                                 conversation_id=conversation_id, step_index=self.PLANNER_STEP)
 
         planner_msg = self.try_plan(planner_input=planner_input)
 
         if planner_msg.status == 'failed' and planner_msg.target_agent is None:
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
-                                              review_summary="Planning failed.",issues=[planner_msg.response.get("error", "Unknown planning error.")],
+                                              review_summary="Planning failed.",
+                                              issues=[planner_msg.response.get("error", "Unknown planning error.")],
                                               error=planner_msg.response.get("error", "Unknown planning error."),
-                                              details=planner_msg.response) 
-        
-        plan_response = self.pin_user_filenames(planner_msg.response, user_task)
+                                              details=planner_msg.response)
 
-        plan_scope_error = self.validate_plan_tool_scope(
-            user_task=user_task,
-            plan_response=plan_response
-        )
+        plan_response = planner_msg.response
+        plan_response["route"] = route
+        plan_response["workspace_before"] = self.tool_registry["list_tree"]["func"](path=".")
 
-        if plan_scope_error:
-            return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
-                                              review_summary="Planner produced a plan outside the task scope.",
-                                              issues=[plan_scope_error],
-                                              details={
-                                                "user_task": user_task,
-                                                "plan_response": plan_response
-                                                }
-                                            )
-
-        #sending the respective accepted response to the user so that it knows what it will do and user will have to verify  
-        execution_state = self.executor.initialise_execution_state(plan_response=plan_response, context=context, recent_messages=k_recent_messages, user_task=user_task)
-        executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state, start_step_index=self.EXECUTOR_STEP, 
-                                       user_task=user_task, plan_response=plan_response)
+        execution_state = self.executor.initialise_execution_state(plan_response=plan_response,
+                                                                    context=planner_input["context"],
+                                                                    recent_messages=planner_input["k_recent_messages"],
+                                                                    user_task=user_task)
+        executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state,
+                                               start_step_index=self.EXECUTOR_STEP, user_task=user_task,
+                                               plan_response=plan_response)
 
         if executor_msg.status == "waiting":
-            return executor_msg #routing the respective message back to the runner method
-        
+            return executor_msg
+
         if executor_msg.status == "failed":
             execution_state = executor_msg.response.get("execution_state", {})
             rollback_results = self.rollback_execution(executor_response=execution_state)
-
             return self.build_failure_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
                                               review_summary="Execution failed before review.",
                                               issues=[executor_msg.response.get("error", "Unknown execution error.")],
                                               execution_response=execution_state, rollback_results=rollback_results,
                                               error=executor_msg.response.get("error", "Unknown execution error."),
                                               details=executor_msg.response)
-        
-        return self.continue_workflow(conversation_id=conversation_id, user_task=user_task,plan_response=plan_response, executor_msg=executor_msg,
-                                      review_retry_used=False)
+
+        return self.continue_workflow(conversation_id=conversation_id, user_task=user_task,
+                                      plan_response=plan_response, executor_msg=executor_msg, review_retry_used=False)
     
     def continue_workflow(self, conversation_id: int, user_task: str, plan_response: dict, executor_msg: Message, review_retry_used: bool) -> Message:
         '''
@@ -752,119 +703,6 @@ class Coordinator():
         review = reviewer_response.get("review_summary", "completed successfully")
         return f"Goal: {goal}. Outcome: {review}."
     
-
-    def is_likely_workspace_task(self, user_task: str) -> bool:
-        """
-        It is a heuristic method which helps the model decide whether the task is clearly about workspace/file operations.
-
-        If this returns False, the Planner should only receive direct_response,
-        because the user is probably chatting or asking a normal question.
-        """
-        text = user_task.lower()
-
-        normal_writing_phrases = [
-        "write me a letter",
-        "write a letter",
-        "write me an email",
-        "write an email",
-        "write me a message",
-        "write a message",
-        "draft a letter",
-        "draft an email",
-        ]
-
-        file_keywords = [
-            "file",
-            "folder",
-            "directory",
-            "workspace",
-
-            "read file",
-            "read the file",
-            "read a file",
-
-            "create file",
-            "create a file",
-            "create new file",
-
-            "write file",
-            "write to",
-            "save as",
-            "save it as",
-
-            "append",
-            "append to",
-
-            "overwrite",
-            "replace file",
-            "replace text",
-            "replace in file",
-
-            "delete file",
-            "remove file",
-            "copy file",
-            "copy",
-            "duplicate file",
-            "duplicate",
-            "find file",
-            "list files",
-            "list folder",
-            "search in files",
-            "search text",
-            "find text",
-            "summarise file",
-            "summarize file",
-            "summarise the file",
-            "summarize the file",
-            "subdirectory",
-            "subdirectories",
-            "folder",
-            "folders",
-            "directory",
-            "directories",
-            "list tree",
-            "project tree",
-            "look through",
-            "recursive",
-            "create folder",
-            "create directory",
-            "delete folder",
-            "delete directory",
-            "remove folder",
-            "remove directory",
-            "move file",
-            "move folder",
-            "move directory",
-            "rename file",
-            "rename folder",
-            "copy file",
-            "copy folder",
-            "copy directory",
-            "duplicate file",
-            "duplicate folder",
-        ]
-
-        file_extensions = [
-            ".txt",
-            ".py",
-            ".json",
-            ".md",
-            ".csv",
-            ".docx",
-            ".pdf",
-        ]
-
-        if any(phrase in text for phrase in normal_writing_phrases):
-            if not any(word in text for word in file_keywords):
-                return False
-
-        if any(ext in text for ext in file_extensions):
-            return True
-
-        if any(keyword in text for keyword in file_keywords):
-            return True
-
-        return False
     
     def rollback_execution(self, executor_response: dict) -> list[dict]:
         rollback_results = []
@@ -964,3 +802,68 @@ class Coordinator():
                 step["args"] = args
 
         return plan_response
+    
+    def validate_route(self, route: dict) -> dict:
+        '''
+            Enforces deterministic route contracts. If router output violates a contract, fall back to safe defaults.
+        '''
+        if not isinstance(route, dict) or "task_type" not in route:
+            return dict(self.SAFE_FALLBACK_ROUTE)
+
+        task_type = route.get("task_type")
+        contract = self.VALID_ROUTE_CONTRACTS.get(task_type)
+
+        if contract is None:
+            return dict(self.SAFE_FALLBACK_ROUTE)
+
+        if route.get("tool_group") != contract["tool_group"]:
+            return dict(self.SAFE_FALLBACK_ROUTE)
+
+        if route.get("use_workspace") != contract["use_workspace"]:
+            return dict(self.SAFE_FALLBACK_ROUTE)
+
+        if route.get("memory_mode") not in {"none", "pinned_only", "relevant_only", "full"}:
+            return dict(self.SAFE_FALLBACK_ROUTE)
+
+        if not isinstance(route.get("use_recent_messages"), bool):
+            return dict(self.SAFE_FALLBACK_ROUTE)
+
+        return route
+
+    def select_tools_for_route(self, route: dict) -> list[dict]:
+        tool_group = route["tool_group"]
+
+        if tool_group == "direct_response_tools":
+            allowed = self.DIRECT_RESPONSE_TOOLS
+        elif tool_group == "read_file_tools":
+            allowed = self.READ_FILE_TOOLS
+        elif tool_group == "summarise_file_tools":
+            allowed = self.SUMMARISE_FILE_TOOLS
+        elif tool_group == "mutation_file_tools":
+            allowed = self.MUTATION_FILE_TOOLS
+        else:
+            allowed = self.DIRECT_RESPONSE_TOOLS
+
+        return [t for t in self.planner_tool_descriptions if t["name"] in allowed]
+
+    def build_scoped_context(self, user_task: str, route: dict) -> str:
+        return self.memory.get_memory_by_mode(task=user_task, mode=route["memory_mode"], k=5)
+
+    def build_scoped_recent_messages(self, conversation_id: int, route: dict) -> list[dict]:
+        if not route["use_recent_messages"]:
+            return []
+        return self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
+
+    def build_scoped_workspace_contents(self, route: dict):
+        if not route["use_workspace"]:
+            return []
+        return self.tool_registry["list_dir"]["func"](path=".")
+
+    def run_router(self, conversation_id: int, user_task: str) -> dict:
+        route_msg = self.router.run(conversation_id=conversation_id, step_index=self.ROUTER_STEP, user_task=user_task)
+        self.memory.store_message(route_msg)
+
+        if route_msg.status != "completed":
+            return dict(self.SAFE_FALLBACK_ROUTE)
+
+        return self.validate_route(route_msg.response)

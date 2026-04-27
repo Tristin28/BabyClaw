@@ -286,20 +286,13 @@ def build_system():
         "tools": list(tool_registry.keys())
     })
 
-    planner = PlannerAgent(llm_client=llm_client)
+    planner = PlannerAgent(llm_client=llm_client, workspace_config=workspace)
     executor = ExecutorAgent(tool_registry=tool_registry)
     reviewer = ReviewerAgent(llm_client=llm_client)
     memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
 
-    coordinator = Coordinator(
-        planner=planner,
-        executor=executor,
-        reviewer=reviewer,
-        memory=memory,
-        planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
-        tool_registry=tool_registry,
-        llm_client=llm_client
-    )
+    coordinator = Coordinator(planner=planner, executor=executor, reviewer=reviewer, memory=memory, planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
+                              tool_registry=tool_registry, llm_client=llm_client)
 
     debug_print("BabyClaw system built successfully")
 

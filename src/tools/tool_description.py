@@ -12,19 +12,78 @@ def make_tool_description(name: str, description: str, args_schema: dict[str, di
 '''
 PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
+        name="direct_response",
+        description=(
+            "Answer the user directly without using workspace files. "
+            "Use this for normal conversation, explanations, advice, drafting, rewriting, and questions. "
+            "Use this when the user wants generated text shown in chat, not saved to a file. "
+            "Do not use this after read_file or summarise_txt just to display the result. "
+            "Do not use this when the user explicitly asks to create, write, append, delete, move, copy, or edit files/folders."
+        ),
+        args_schema={
+            "prompt": {
+                "type": "string",
+                "description": "The exact instruction/question to answer. Preserve the user's meaning and pronouns.",
+                "step_chainable": True,
+                "required": True
+            }
+        },
+        returns={"type": "string"}
+    ),
+
+    make_tool_description(
+        name="generate_content",
+        description=(
+            "Generate raw text/code content that will be saved into a file by a later step. "
+            "Use this only when the user asks to generate something and save/create/write it into a file. "
+            "Typical order: generate_content first, then create_file or write_file with content_step. "
+            "Return only the raw content, with no explanation, greeting, or markdown code fences. "
+            "Do not use this for normal chat replies; use direct_response instead."
+        ),
+        args_schema={
+            "prompt": {
+                "type": "string",
+                "description": "Specific instruction describing the content to generate. Mention format/language when relevant.",
+                "step_chainable": False,
+                "required": True
+            }
+        },
+        returns={"type": "string"}
+    ),
+
+    make_tool_description(
         name="read_file",
         description=(
-            "Read the full contents of a file inside the workspace sandbox. "
-            "Use this when the user asks about a specific file or when another step needs the file's text as input. "
-            "Do not use this if the exact file path is unknown; use find_file or find_file_recursive when the user gives a partial filename. "
-            "Use this before summarise_txt when the file must be read before it can be summarised. "
-            "The 'path' argument must be the relative path of the file inside the workspace. "
-            "Returns: the file contents as a string."
+            "Read the full contents of one file inside the workspace. "
+            "Use this when the user asks to read, show, open, view, or use the contents of an exact file path. "
+            "Use this before summarise_txt when summarising a file. "
+            "If the file path is unclear, use find_file or find_file_recursive first, then read_file with path_step. "
+            "Do not use this to list folders or search filenames."
         ),
         args_schema={
             "path": {
                 "type": "string",
                 "description": "Relative path of the file inside the workspace.",
+                "step_chainable": True,
+                "required": True
+            }
+        },
+        returns={"type": "string"}
+    ),
+
+    make_tool_description(
+        name="summarise_txt",
+        description=(
+            "Summarise text from a previous step. "
+            "Use this when the user asks to summarise, shorten, explain, or describe file/text contents. "
+            "Typical order for a file summary: read_file first, then summarise_txt with text_step. "
+            "Do not pass a file path directly. "
+            "Do not use this when the user only asks to read/show/open/view a file."
+        ),
+        args_schema={
+            "text": {
+                "type": "string",
+                "description": "Text to summarise. Usually use text_step from read_file.",
                 "step_chainable": True,
                 "required": True
             }
@@ -35,17 +94,35 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="list_dir",
         description=(
-            "List files and subdirectories directly inside one directory in the workspace sandbox. "
-            "Use this when the user wants to inspect one folder level only. "
-            "Do not use this to recursively inspect subdirectories; use list_tree for that. "
-            "Do not use this to read file contents; use read_file for that. "
-            "The 'path' argument must be a relative directory path inside the workspace, and '.' means the workspace root. "
-            "Returns: an array of name strings."
+            "List the files/folders directly inside one workspace directory. "
+            "Use this when the user asks to list one folder level. "
+            "Use path='.' for the workspace root. "
+            "Do not use this to recursively inspect subfolders; use list_tree. "
+            "Do not use this to read file contents; use read_file."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative directory path inside workspace. Use '.' to list workspace root.",
+                "description": "Relative directory path. Use '.' for workspace root.",
+                "step_chainable": False,
+                "required": True
+            }
+        },
+        returns={"type": "array"}
+    ),
+
+    make_tool_description(
+        name="list_tree",
+        description=(
+            "Recursively list files/folders inside a workspace directory. "
+            "Use this when the user asks to inspect the project tree, show all files, or look inside subdirectories. "
+            "Use path='.' for the workspace root. "
+            "Do not use this to read contents; use read_file."
+        ),
+        args_schema={
+            "path": {
+                "type": "string",
+                "description": "Relative directory path to recursively list. Use '.' for workspace root.",
                 "step_chainable": False,
                 "required": True
             }
@@ -56,23 +133,22 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="find_file",
         description=(
-            "Find exactly one file inside one directory in the workspace sandbox using a partial filename query. "
-            "Use this when the user clearly refers to a file but does not provide the exact filename or extension, and the file is expected in one directory. "
-            "Do not use this if the user already provided the exact filename. "
-            "Do not use this if the file may be inside subdirectories; use find_file_recursive for that. "
-            "Use this before read_file when read_file needs an exact path but the user gave only a partial file name. "
-            "Fails if no files match or if multiple files match."
+            "Find exactly one file by partial filename inside one directory. "
+            "Use this when the user refers to a file unclearly and it is expected in one known directory. "
+            "Use find_file_recursive if it may be inside subdirectories. "
+            "Do not use this if the user already gave the exact path. "
+            "Typical order: find_file, then read_file/replace_text/move_path/copy_path using path_step."
         ),
         args_schema={
             "query": {
                 "type": "string",
-                "description": "Partial filename or search term to match.",
+                "description": "Partial filename or search term.",
                 "step_chainable": False,
                 "required": True
             },
             "directory": {
                 "type": "string",
-                "description": "Directory to search inside. Use '.' for the workspace root.",
+                "description": "Directory to search inside. Use '.' for workspace root.",
                 "step_chainable": False,
                 "required": True
             }
@@ -81,60 +157,70 @@ PLANNER_TOOL_DESCRIPTIONS = [
     ),
 
     make_tool_description(
-        name="summarise_txt",
+        name="find_file_recursive",
         description=(
-            "Summarise text produced by a previous step. "
-            "Use this only when the user explicitly asks to summarise, summarize, shorten, explain, or describe text/file contents. "
-            "Do not use this when the user only asks to read, show, open, or view a file. "
-            "Use text_step when summarising output from a previous step such as read_file. "
-            "Do not pass a file path directly."
+            "Find exactly one file by partial filename inside a directory and all its subdirectories. "
+            "Use this when the user refers to a file unclearly and it may be nested. "
+            "Do not use this if the user already gave the exact path. "
+            "Typical order: find_file_recursive, then read_file/replace_text/move_path/copy_path using path_step."
         ),
         args_schema={
-            "text": {
+            "query": {
                 "type": "string",
-                "description": "Text to summarise. Use text_step if the text comes from a previous step.",
-                "step_chainable": True,
+                "description": "Partial filename to search for.",
+                "step_chainable": False,
+                "required": True
+            },
+            "directory": {
+                "type": "string",
+                "description": "Directory to search from. Use '.' for workspace root.",
+                "step_chainable": False,
                 "required": True
             }
         },
         returns={"type": "string"}
+    ),
+
+    make_tool_description(
+        name="search_text",
+        description=(
+            "Search for a word/phrase inside workspace file contents. "
+            "Use this when the user asks where some text, function, class, phrase, or concept appears. "
+            "Do not use this to find filenames; use find_file or find_file_recursive. "
+            "Do not use this to read a whole file; use read_file."
+        ),
+        args_schema={
+            "query": {
+                "type": "string",
+                "description": "Text to search for inside files.",
+                "step_chainable": False,
+                "required": True
+            }
+        },
+        returns={"type": "array"}
     ),
 
     make_tool_description(
         name="create_file",
         description=(
-            "Creates a brand-new file inside the workspace sandbox. "
-            "Choose this tool only when the user asks to create a new file that should not already exist. "
-            "The path argument is the new file name or relative path. "
-            "The content argument is always required by the tool, but it may be an empty string. "
-            "If the user says what to put inside the file, use that text as content. "
-            "If the user asks to create a file but does not say what should be inside it, use content=\"\". "
-            "If the content must be generated first, use generate_content first and then create_file with content_step. "
-            "Do not use direct_response for file content."
-            "Do not use this tool to overwrite or update an existing file; use write_file for that. "
-            "Returns a confirmation string."
+            "Create a brand-new file inside the workspace. "
+            "Use this only when the user asks to create a new file. "
+            "Always provide both path and content. "
+            "If the user gives direct content, use it directly. "
+            "If the user asks for an empty file, use content=''. "
+            "If content must be generated, use generate_content first and then create_file with content_step. "
+            "Do not use this to overwrite an existing file; use write_file."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": (
-                    "Relative path of the new file inside the workspace. "
-                    "Example: 'notes.txt' or 'notes/week1.txt'. "
-                    "If the user gives a file name without an extension, infer a reasonable extension only when the user clearly implies one, "
-                    "for example a text file should use '.txt'."
-                ),
+                "description": "Relative path of the new file. Preserve the user's filename/path.",
                 "step_chainable": False,
                 "required": True
             },
             "content": {
                 "type": "string",
-                "description": (
-                    "Initial text content to write into the new file. "
-                    "This argument is required, but it can be an empty string. "
-                    "Use the user's provided text when they specify content. "
-                    "Use an empty string if the user only asks to create the file without specifying content. "
-                    "Use content_step if the content comes from a previous step."
-                ),
+                "description": "Initial file content. Use content_step if generated/read from a previous step.",
                 "step_chainable": True,
                 "required": True
             }
@@ -145,22 +231,22 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="write_file",
         description=(
-            "Write text content to a file inside the workspace sandbox. "
-            "Use this when the user asks to write, save, replace, or overwrite content in a file. "
-            "Use content_step if the content comes from a previous step such as direct_response, read_file, or summarise_txt. "
-            "Do not use this when the user only wants the result displayed. "
-            "Returns a confirmation string."
+            "Write/overwrite text content into a file inside the workspace. "
+            "Use this when the user asks to write, save, replace the whole file, or overwrite a file. "
+            "If the user gives direct content, use it directly. "
+            "If content must be generated, use generate_content first and then write_file with content_step. "
+            "Do not use this when the user only wants to see the answer in chat."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative path of the file inside the workspace.",
+                "description": "Relative path of the file to write.",
                 "step_chainable": False,
                 "required": True
             },
             "content": {
                 "type": "string",
-                "description": "Text content to write. Use content_step if content comes from a previous step.",
+                "description": "Text to write. Use content_step if it comes from a previous step.",
                 "step_chainable": True,
                 "required": True
             }
@@ -171,101 +257,36 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="append_file",
         description=(
-            "Append text content to the end of a file inside the workspace sandbox. "
+            "Append text to the end of a file inside the workspace. "
             "Use this when the user asks to add content without replacing existing content. "
-            "If the user directly gives the text to append, use the content argument directly. "
+            "If the user gives direct content, use it directly. "
             "Use content_step only if the content comes from a previous step. "
-            "Do not use this to overwrite the whole file. "
-            "Returns a confirmation string."
+            "Do not use this to overwrite the whole file."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative path of the file inside the workspace.",
+                "description": "Relative path of the file to append to.",
                 "step_chainable": False,
                 "required": True
             },
             "content": {
                 "type": "string",
-                "description": "Text content to append. Use content_step if content comes from a previous step.",
+                "description": "Text to append. Use content_step if it comes from a previous step.",
                 "step_chainable": True,
                 "required": True
             }
         },
         returns={"type": "string"}
-    ),
-
-    make_tool_description(
-        name="direct_response",
-        description=(
-            "Generate a direct response to the user using the LLM. "
-            "Use this for normal chat tasks such as greetings, explanations, email drafts, message drafts, rewrites, or questions. "
-            "Use this when the user asks to generate text but does not ask to save it into a file. "
-            "Do not use this after read_file just to display file contents. The Coordinator/runner displays read_file results directly. "
-            "Do not use this after summarise_txt just to display the summary. The Coordinator/runner displays summarise_txt results directly. "
-            "Do not use this if the user explicitly asks to create, write, append, overwrite, delete, move, or copy a file/folder."
-        ),
-        args_schema={
-            "prompt": {
-                "type": "string",
-                "description": "The instruction or user request that the LLM should answer directly.",
-                "step_chainable": True,
-                "required": True
-            }
-        },
-        returns={"type": "string"}
-    ),
-
-    make_tool_description(
-        name="delete_file",
-        description=(
-            "Delete a file inside the workspace sandbox. "
-            "Use this only when the user explicitly asks to delete or remove a file. "
-            "Do not use this to delete folders; use delete_dir for folders. "
-            "Do not use this for clearing file content; use write_file with empty content only if the user asks to empty a file. "
-            "Requires permission because it modifies the workspace. "
-            "Returns a confirmation string."
-        ),
-        args_schema={
-            "path": {
-                "type": "string",
-                "description": "Relative path of the file to delete inside the workspace.",
-                "step_chainable": True,
-                "required": True
-            }
-        },
-        returns={"type": "string"}
-    ),
-
-    make_tool_description(
-        name="search_text",
-        description=(
-            "Search for a text query inside files in the workspace sandbox. "
-            "Use this when the user asks to find where some word, phrase, function, class, or concept appears inside workspace files. "
-            "Do not use this to read a whole file; use read_file for that. "
-            "Do not use this to find a filename; use find_file or find_file_recursive for filename search. "
-            "Returns a list of matches with path, line number, and line text."
-        ),
-        args_schema={
-            "query": {
-                "type": "string",
-                "description": "The word or phrase to search for inside file contents.",
-                "step_chainable": False,
-                "required": True
-            }
-        },
-        returns={"type": "array"}
     ),
 
     make_tool_description(
         name="replace_text",
         description=(
-            "Replace text inside a file in the workspace sandbox. "
-            "Use this when the user asks to replace one exact piece of text with another exact piece of text inside a file. "
-            "Do not use this if the user asks to rewrite the whole file; use write_file for that. "
-            "If the file path is unknown, use find_file or find_file_recursive first, then use path_step. "
-            "Requires permission because it modifies the file. "
-            "Returns a confirmation string."
+            "Replace exact text inside one file. "
+            "Use this when the user asks to replace one exact piece of text with another. "
+            "If the file path is unknown, use find_file or find_file_recursive first, then replace_text with path_step. "
+            "Do not use this to rewrite the whole file; use write_file."
         ),
         args_schema={
             "path": {
@@ -282,7 +303,7 @@ PLANNER_TOOL_DESCRIPTIONS = [
             },
             "new_text": {
                 "type": "string",
-                "description": "New text to insert instead.",
+                "description": "New text to insert.",
                 "step_chainable": False,
                 "required": True
             }
@@ -291,45 +312,18 @@ PLANNER_TOOL_DESCRIPTIONS = [
     ),
 
     make_tool_description(
-        name="list_tree",
+        name="delete_file",
         description=(
-            "Recursively list files and folders inside a workspace directory, including subdirectories. "
-            "Use this when the user asks to look through folders, inspect the project tree, show all files, or explore subdirectories. "
-            "Use path='.' for the workspace root. "
-            "Do not use this to read file contents. Use read_file for contents. "
-            "Returns a list of relative paths. Directories end with '/'."
+            "Delete one file inside the workspace. "
+            "Use this only when the user explicitly asks to delete/remove a file. "
+            "Do not use this for folders; use delete_dir. "
+            "Do not use this to clear file content; use write_file with empty content only if the user asks to empty the file."
         ),
         args_schema={
             "path": {
                 "type": "string",
-                "description": "Relative directory path to recursively list. Use '.' for workspace root.",
-                "step_chainable": False,
-                "required": True
-            }
-        },
-        returns={"type": "array"}
-    ),
-
-    make_tool_description(
-        name="find_file_recursive",
-        description=(
-            "Recursively find exactly one file by partial filename inside a directory and its subdirectories. "
-            "Use this when the user refers to a file but does not provide its exact path, and the file may be inside subdirectories. "
-            "Do not use this when the user already gave the exact path. "
-            "Use this before read_file, copy_file, copy_path, move_path, or replace_text when an exact path is needed. "
-            "Fails if no files match or if multiple files match."
-        ),
-        args_schema={
-            "query": {
-                "type": "string",
-                "description": "Partial filename to search for.",
-                "step_chainable": False,
-                "required": True
-            },
-            "directory": {
-                "type": "string",
-                "description": "Directory to search inside. Use '.' for workspace root.",
-                "step_chainable": False,
+                "description": "Relative path of the file to delete.",
+                "step_chainable": True,
                 "required": True
             }
         },
@@ -339,13 +333,10 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="create_dir",
         description=(
-            "Create a directory inside the workspace sandbox. "
-            "Use this when the user asks to create a folder or directory. "
-            "Do not use create_file for folders. "
-            "Do not use this before create_file only to create parent folders, because create_file already creates parent folders when needed. "
-            "Use this for empty folders or when the user explicitly asks for a folder. "
-            "Requires permission because it modifies the workspace. "
-            "Returns a confirmation string."
+            "Create a folder/directory inside the workspace. "
+            "Use this when the user explicitly asks to create a folder/directory. "
+            "Do not use this before create_file just to create parent folders, because create_file can create parent folders when needed. "
+            "Use this for empty folders or explicitly requested folders."
         ),
         args_schema={
             "path": {
@@ -361,11 +352,9 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="delete_dir",
         description=(
-            "Delete a directory and everything inside it from the workspace sandbox. "
-            "Use this only when the user explicitly asks to delete/remove a folder or directory. "
-            "Do not use this to delete a file. Use delete_file for files. "
-            "Requires permission because it modifies the workspace. "
-            "Returns a confirmation string."
+            "Delete one directory and its contents from the workspace. "
+            "Use this only when the user explicitly asks to delete/remove a folder/directory. "
+            "Do not use this for files; use delete_file."
         ),
         args_schema={
             "path": {
@@ -381,18 +370,16 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="move_path",
         description=(
-            "Move a file or directory from one workspace path to another. "
-            "Use this when the user asks to move or rename a file/folder. "
-            "The destination_path must be the full final path, including the filename or folder name. "
-            "Example: to move hello.txt into archive, use destination_path='archive/hello.txt'. "
-            "Example: to rename old.txt to new.txt, use source_path='old.txt' and destination_path='new.txt'. "
-            "Requires permission because it modifies the workspace. "
-            "Returns a confirmation string."
+            "Move or rename a file/folder inside the workspace. "
+            "Use this when the user asks to move or rename something. "
+            "destination_path must be the full final path, including the filename/folder name. "
+            "Example move: source_path='hello.txt', destination_path='archive/hello.txt'. "
+            "Example rename: source_path='old.txt', destination_path='new.txt'."
         ),
         args_schema={
             "source_path": {
                 "type": "string",
-                "description": "Relative path of the source file or directory.",
+                "description": "Relative source path.",
                 "step_chainable": True,
                 "required": True
             },
@@ -409,45 +396,21 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="copy_path",
         description=(
-            "Copy a file or directory from one workspace path to another. "
-            "Use this when the user asks to copy, duplicate, or clone a file/folder. "
-            "The destination_path must be the full final path, including the filename or folder name. "
-            "Example: to copy hello.txt into backup, use destination_path='backup/hello.txt'. "
-            "Use this instead of copy_file if the source may be either a file or a folder. "
-            "Requires permission because it writes to the workspace. "
-            "Returns a confirmation string."
+            "Copy a file/folder inside the workspace. "
+            "Use this when the user asks to copy, duplicate, or clone something. "
+            "destination_path must be the full final path, including the filename/folder name. "
+            "Example: source_path='hello.txt', destination_path='backup/hello.txt'."
         ),
         args_schema={
             "source_path": {
                 "type": "string",
-                "description": "Relative path of the source file or directory.",
+                "description": "Relative source path.",
                 "step_chainable": True,
                 "required": True
             },
             "destination_path": {
                 "type": "string",
                 "description": "Relative final destination path.",
-                "step_chainable": False,
-                "required": True
-            }
-        },
-        returns={"type": "string"}
-    ),
-
-    make_tool_description(
-        name="generate_content",
-        description=(
-            "Generate raw text or code content using the LLM for chaining into create_file, write_file, or append_file. "
-            "Use this when the user asks to create or save generated material to a file: code, scripts, essays, configs, drafts, READMEs. "
-            "Returns ONLY the raw content with no greetings, commentary, or markdown code fences, so it can be written directly into a file via content_step. "
-            "Do not use this for chat replies or explanations shown to the user; use direct_response for that. "
-            "Do not use this when the user only wants to see the answer and not save it. "
-            "Pair this with create_file/write_file using content_step to inject the generated text."
-        ),
-        args_schema={
-            "prompt": {
-                "type": "string",
-                "description": "Instruction describing what content to generate. Be specific about language, format, and length when relevant.",
                 "step_chainable": False,
                 "required": True
             }

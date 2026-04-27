@@ -28,6 +28,7 @@ from src.Memory.sql_database import DatabaseManager
 from src.tools.tool_registry import build_tool_registry
 from src.tools.tool_description import PLANNER_TOOL_DESCRIPTIONS
 from src.tools.utils import WorkspaceConfig
+from src.Agents.Routing.RouteAgent import RouteAgent
 
 
 CONVERSATION_ID = 1
@@ -43,6 +44,7 @@ def build_system():
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
     llm_client = OllamaClient(model="qwen2.5-coder:7b")
+    llm_client_2 = OllamaClient(model="qwen2.5:3b") #A less strict llm for reviewer
 
     db_manager = DatabaseManager(db_path=str(DB_PATH))
     db_manager.init_db()
@@ -54,19 +56,21 @@ def build_system():
         workspace=workspace
     )
 
-    planner = PlannerAgent(llm_client=llm_client)
+    planner = PlannerAgent(llm_client=llm_client, workspace_config=workspace)
     executor = ExecutorAgent(tool_registry=tool_registry)
-    reviewer = ReviewerAgent(llm_client=llm_client)
+    reviewer = ReviewerAgent(llm_client=llm_client_2)
     memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
+    router = RouteAgent(llm_client=llm_client)
 
     coordinator = Coordinator(
         planner=planner,
         executor=executor,
         reviewer=reviewer,
         memory=memory,
+        router=router,                                
         planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
         tool_registry=tool_registry,
-        llm_client=llm_client
+        llm_client=llm_client,
     )
 
     return coordinator, workspace

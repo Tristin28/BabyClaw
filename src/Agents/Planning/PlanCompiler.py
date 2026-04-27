@@ -1,3 +1,6 @@
+from pathlib import Path
+from src.tools.utils import WorkspaceConfig
+
 class PlanCompiler:
     REQUIRED_TOP_LEVEL_FIELDS = {
         "goal": str,
@@ -10,23 +13,17 @@ class PlanCompiler:
         "args": dict,
     }
 
-    def __init__(self, available_tools: list[dict]):
+    def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None):
         """
         available_tools should be the same planner-facing tool descriptions
         given to the PlannerAgent.
 
-        Expected tool format:
-            {
-                "name": "read_file",
-                "args_schema": {
-                    "path": {
-                        "type": "string",
-                        "step_chainable": False
-                    }
-                }
-            }
+        workspace_config is used to validate path-like planner arguments before
+        execution or permission. This means hallucinated paths like
+        '../../etc/passwd' fail during plan compilation.
         """
         self.available_tools = available_tools
+        self.workspace_config = workspace_config
 
         self.tool_names = {
             tool["name"]
@@ -42,6 +39,76 @@ class PlanCompiler:
         # Maps planner-provided ids to compiler-normalised ids.
         self.old_to_new_id: dict[int, int] = {}
 
+    def validate_workspace_paths(self, steps: list[dict]) -> None:
+        """
+        Validates direct path-like arguments before execution.
+
+        This prevents planner-hallucinated paths from reaching:
+        - permission requests,
+        - tool execution,
+        - rollback logic.
+
+        Only direct string args are checked here.
+        *_step args are skipped because their values come from previous tool
+        outputs and are still checked by the runtime workspace sandbox.
+        """
+        if self.workspace_config is None:
+            return
+
+        path_like_arg_names = {"path", "source_path", "destination_path", "directory",}
+
+        mutating_tools = {"create_file", "write_file", "append_file", "delete_file", "replace_text", "create_dir", "delete_dir", "move_path", "copy_path",}
+
+        for step in steps:
+            step_id = step["id"]
+            tool_name = step["tool"]
+            args = step.get("args", {})
+
+            for arg_name, arg_value in args.items():
+                if arg_name.endswith("_step"):
+                    continue
+
+                if arg_name not in path_like_arg_names:
+                    continue
+
+                if not isinstance(arg_value, str):
+                    continue
+
+                cleaned_value = arg_value.strip()
+
+                if cleaned_value == "":
+                    raise ValueError(
+                        f"Step {step_id} tool '{tool_name}' arg '{arg_name}' "
+                        f"cannot be an empty path."
+                    )
+
+                is_windows_absolute = (
+                    len(cleaned_value) >= 3
+                    and cleaned_value[1] == ":"
+                    and cleaned_value[2] in {"\\", "/"}
+                )
+
+                if Path(cleaned_value).is_absolute() or is_windows_absolute:
+                    raise ValueError(
+                        f"Step {step_id} tool '{tool_name}' arg '{arg_name}' "
+                        f"must be a relative workspace path, got '{arg_value}'."
+                    )
+
+                if tool_name in mutating_tools and cleaned_value in {".", "./"}:
+                    raise ValueError(
+                        f"Step {step_id} tool '{tool_name}' arg '{arg_name}' "
+                        f"cannot target the workspace root directly."
+                    )
+
+                try:
+                    self.workspace_config.resolve_workspace_path(cleaned_value)
+                except Exception as e:
+                    raise ValueError(
+                        f"Step {step_id} tool '{tool_name}' arg '{arg_name}' "
+                        f"resolves outside the workspace or is unsafe: '{arg_value}'. "
+                        f"Reason: {e}"
+                    )
+                
     def apply_safe_defaults(self, steps: list[dict]) -> list[dict]:
         '''
             Deterministic fallback for tools where a missing argument is almost always
@@ -143,8 +210,10 @@ class PlanCompiler:
 
         normalised_steps = self.apply_safe_defaults(normalised_steps)
         self.repair_placeholder_chains(normalised_steps)
+        self.reject_fake_step_strings(normalised_steps)
 
         self.validate_step_args_are_allowed(normalised_steps)
+        self.validate_workspace_paths(normalised_steps)
         self.validate_required_args_present(normalised_steps)
 
         normalised_steps = self.infer_dependencies_from_step_args(normalised_steps)

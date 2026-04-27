@@ -1,33 +1,218 @@
-from src.Agents.Planning.PlannerAgent import PlannerAgent
 from src.Agents.ExecutorAgent import ExecutorAgent
-from src.Agents.MemoryAgent import MemoryAgent
 from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
 from src.Agents.Coordinator import Coordinator
-
-from src.OllamaClient import OllamaClient
-from src.Memory.sql_database import DatabaseManager
+from src.message import Message
 from src.tools.tool_registry import build_tool_registry
 from src.tools.tool_description import PLANNER_TOOL_DESCRIPTIONS
 from src.tools.utils import WorkspaceConfig
 
 
-CONVERSATION_ID = 1
+class FakeMemory:
+    def __init__(self):
+        self.messages = []
+
+    def store_message(self, message):
+        self.messages.append(message)
+        return message
+
+    def get_relevant_memory(self, task: str, k: int):
+        return ""
+
+    def get_recent_conversation_messages(self, conversation_id: int, k: int = 5):
+        return []
+
+    def store_long_term_memory(self, user_task: str, episode_summary: str, conversation_id: int, step_index: int):
+        return Message(
+            conversation_id=conversation_id,
+            step_index=step_index,
+            sender="memory",
+            receiver="coordinator",
+            target_agent=None,
+            message_type="memory_store",
+            status="completed",
+            response={"stored": False},
+            visibility="internal"
+        )
 
 
-def build_system():
-    llm_client = OllamaClient()
-    db_manager = DatabaseManager("./memory.db")
-    workspace = WorkspaceConfig(root="workspace")
+class FakePlanner:
+    """
+    First plan intentionally hallucinates an extra workspace mutation.
+    Second plan is corrected after reviewer rejection.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self.name = "planner"
+
+    def run(self, planner_input: dict):
+        self.calls.append(planner_input)
+
+        if len(self.calls) == 1:
+            response = {
+                "goal": "Create work.txt with hello, but hallucinate an extra directory",
+                "steps": [
+                    {
+                        "id": 1,
+                        "tool": "create_file",
+                        "args": {
+                            "path": "work.txt",
+                            "content": "hello"
+                        },
+                        "depends_on": []
+                    },
+                    {
+                        "id": 2,
+                        "tool": "create_dir",
+                        "args": {
+                            "path": "unrelated_dir"
+                        },
+                        "depends_on": []
+                    }
+                ],
+                "planning_rationale": "Bad hallucinated plan."
+            }
+        else:
+            response = {
+                "goal": "Create work.txt with hello",
+                "steps": [
+                    {
+                        "id": 1,
+                        "tool": "create_file",
+                        "args": {
+                            "path": "work.txt",
+                            "content": "hello"
+                        },
+                        "depends_on": []
+                    }
+                ],
+                "planning_rationale": "Corrected plan after reviewer rejection."
+            }
+
+        return Message(
+            conversation_id=planner_input["conversation_id"],
+            step_index=planner_input["step_index"],
+            sender="planner",
+            receiver="coordinator",
+            target_agent="executor",
+            message_type="plan",
+            status="completed",
+            response=response,
+            visibility="internal"
+        )
+
+
+class FakeReviewer:
+    """
+    Rejects the first execution because it contains create_dir on unrelated_dir.
+    Accepts the second execution.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def build_review_evidence(self, executor_response: dict, workspace_before=None, workspace_after=None) -> dict:
+        clean_steps = []
+
+        for step in executor_response.get("execution_trace", []):
+            clean_step = {
+                "id": step.get("id"),
+                "tool": step.get("tool"),
+                "status": step.get("status"),
+                "args": step.get("args", {}),
+            }
+
+            if "resolved_args" in step:
+                clean_step["resolved_args"] = step["resolved_args"]
+
+            if "result" in step:
+                clean_step["result"] = step["result"]
+
+            if "error" in step:
+                clean_step["error"] = step["error"]
+
+            clean_steps.append(clean_step)
+
+        return {
+            "goal": executor_response.get("goal", ""),
+            "steps": clean_steps,
+            "workspace_before": workspace_before or executor_response.get("workspace_before", []),
+            "workspace_after": workspace_after or executor_response.get("workspace_after", []),
+        }
+
+    def run(self, conversation_id: int, step_index: int, user_task: str,
+            execution_response: dict, workspace_before=None, workspace_after=None):
+
+        self.calls.append({
+            "user_task": user_task,
+            "execution_response": execution_response,
+            "workspace_before": workspace_before or [],
+            "workspace_after": workspace_after or []
+        })
+
+        trace = execution_response.get("execution_trace", [])
+
+        for step in trace:
+            args = step.get("resolved_args") or step.get("args", {})
+
+            if step.get("tool") == "create_dir" and args.get("path") == "unrelated_dir":
+                return Message(
+                    conversation_id=conversation_id,
+                    step_index=step_index,
+                    sender="reviewer",
+                    receiver="coordinator",
+                    target_agent=None,
+                    message_type="review_result",
+                    status="completed",
+                    response={
+                        "accepted": False,
+                        "review_summary": "Execution included an unrequested directory creation.",
+                        "issues": ["create_dir on unrelated_dir was not requested by the current task."]
+                    },
+                    visibility="internal"
+                )
+
+        return Message(
+            conversation_id=conversation_id,
+            step_index=step_index,
+            sender="reviewer",
+            receiver="coordinator",
+            target_agent=None,
+            message_type="review_result",
+            status="completed",
+            response={
+                "accepted": True,
+                "review_summary": "The requested file was created correctly.",
+                "issues": []
+            },
+            visibility="internal"
+        )
+
+
+class FakeLLM:
+    def invoke_json(self, *args, **kwargs):
+        return {"should_store": False, "memories": []}
+
+    def invoke_text(self, *args, **kwargs):
+        return "summary"
+
+
+def build_test_system(tmp_path):
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    workspace = WorkspaceConfig(root=str(workspace_root))
+    llm = FakeLLM()
 
     tool_registry = build_tool_registry(
-        llm_client=llm_client,
+        llm_client=llm,
         workspace=workspace
     )
 
-    planner = PlannerAgent(llm_client=llm_client)
+    planner = FakePlanner()
     executor = ExecutorAgent(tool_registry=tool_registry)
-    reviewer = ReviewerAgent(llm_client=llm_client)
-    memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
+    reviewer = FakeReviewer()
+    memory = FakeMemory()
 
     coordinator = Coordinator(
         planner=planner,
@@ -36,118 +221,146 @@ def build_system():
         memory=memory,
         planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
         tool_registry=tool_registry,
-        llm_client=llm_client
+        llm_client=llm
     )
 
-    return coordinator, workspace
+    return coordinator, workspace, planner, reviewer, workspace_root
 
 
-def display_result(message):
-    response = message.response or {}
+def approve_permission_if_needed(coordinator, message):
+    """
+    The real system asks permission before workspace mutations.
+    This helper simulates the user saying yes.
+    """
+    if message.message_type != "permission_request":
+        return message
 
-    if message.message_type == "permission_request":
-        print("\nSystem: This task needs permission before modifying the workspace.")
+    response = message.response
 
-        requested_tools = response.get("requested_tools", [])
-
-        for tool in requested_tools:
-            print(f"- {tool.get('tool')} with args {tool.get('args')}")
-
-        print("\nReply with 'yes' to approve or 'no' to cancel.")
-        return
-
-    if message.status == "cancelled":
-        print("\nSystem:", response.get("message", "Task cancelled."))
-        return
-
-    if message.status == "completed":
-        output = (
-            response.get("direct_response")
-            or response.get("display_result")
-            or response.get("message")
-            or "Task completed successfully."
-        )
-
-        print("\nSystem:")
-        print(output)
-        return
-
-    output = response.get("message", "Task could not be completed successfully.")
-    print("\nSystem:")
-    print(output)
-
-    issues = response.get("issues", [])
-    if issues:
-        print("\nIssues:")
-        for issue in issues:
-            print(f"- {issue}")
+    return coordinator.continue_after_permission(
+        conversation_id=1,
+        user_task=response["user_task"],
+        plan_response=response["plan_response"],
+        execution_state=response["execution_state"],
+        pending_runnable_steps=response["pending_runnable_steps"],
+        step_index=response["next_step_index"],
+        approved=True
+    )
 
 
-def main():
-    coordinator, workspace = build_system()
-    pending_permission = None
+def test_reject_then_rollback_then_replan_then_succeed(tmp_path):
+    coordinator, workspace, planner, reviewer, workspace_root = build_test_system(tmp_path)
 
-    print("BabyClaw is ready.")
-    print("Type a task, or type 'exit' to stop.")
-    print("Type 'set workspace <path>' to change workspace.")
+    message = coordinator.start_workflow(
+        conversation_id=1,
+        user_task="create work.txt with hello"
+    )
 
-    while True:
-        user_input = input("\nYou: ").strip()
+    # First plan requires permission because it mutates files.
+    message = approve_permission_if_needed(coordinator, message)
 
-        if user_input.lower() == "exit":
-            print("Exiting.")
-            break
+    # First execution should be rejected because it created unrelated_dir.
+    # Coordinator should rollback and replan.
+    # Second plan also needs permission.
+    message = approve_permission_if_needed(coordinator, message)
 
-        if not user_input:
-            continue
+    assert message.status == "completed"
+    assert message.message_type == "workflow_result"
 
-        if user_input.lower().startswith("set workspace "):
-            new_workspace = user_input[len("set workspace "):].strip()
+    assert (workspace_root / "work.txt").exists()
+    assert (workspace_root / "work.txt").read_text(encoding="utf-8") == "hello"
 
-            try:
-                workspace.set_root(new_workspace)
-                print(f"System: Workspace changed to {workspace.root}")
-            except Exception as e:
-                print(f"System: Failed to change workspace: {e}")
+    # This confirms rollback removed the hallucinated extra mutation.
+    assert not (workspace_root / "unrelated_dir").exists()
 
-            continue
+    # Planner was called twice: first hallucinated, second corrected.
+    assert len(planner.calls) == 2
 
-        if pending_permission:
-            if user_input.lower() not in {"yes", "y", "no", "n"}:
-                print("System: Please reply with 'yes' or 'no'.")
-                continue
+    first_planner_input = planner.calls[0]
+    second_planner_input = planner.calls[1]
 
-            approved = user_input.lower() in {"yes", "y"}
+    # The original task must stay unchanged.
+    assert first_planner_input["task"] == "create work.txt with hello"
+    assert second_planner_input["task"] == "create work.txt with hello"
 
-            message = coordinator.continue_after_permission(
-                conversation_id=CONVERSATION_ID,
-                user_task=pending_permission["user_task"],
-                plan_response=pending_permission["plan_response"],
-                execution_state=pending_permission["execution_state"],
-                pending_runnable_steps=pending_permission["pending_runnable_steps"],
-                step_index=pending_permission["next_step_index"],
-                approved=approved
-            )
+    # Rejection feedback must go into context, not into task.
+    assert "REPLAN CONTEXT" in second_planner_input["context"]
+    assert "create_dir on unrelated_dir" in second_planner_input["context"]
+    assert "create_dir on unrelated_dir" not in second_planner_input["task"]
 
-            pending_permission = None
-
-            display_result(message)
-
-            if message.message_type == "permission_request":
-                pending_permission = message.response
-
-            continue
-
-        message = coordinator.start_workflow(
-            conversation_id=CONVERSATION_ID,
-            user_task=user_input
-        )
-
-        display_result(message)
-
-        if message.message_type == "permission_request":
-            pending_permission = message.response
+    # Reviewer saw both executions.
+    assert len(reviewer.calls) == 2
 
 
-if __name__ == "__main__":
-   main()
+def test_planner_path_traversal_fails_before_permission_or_execution(tmp_path):
+    """
+    Unsafe paths should fail during plan compilation before permission or execution.
+    """
+    from src.Agents.Planning.PlannerAgent import PlannerAgent
+
+    class PathTraversalLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            return {
+                "goal": "Read outside workspace",
+                "steps": [
+                    {
+                        "id": 1,
+                        "tool": "read_file",
+                        "args": {"path": "../../etc/passwd"}
+                    }
+                ],
+                "planning_rationale": "Bad hallucinated path."
+            }
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    workspace = WorkspaceConfig(root=str(workspace_root))
+
+    planner = PlannerAgent(
+        llm_client=PathTraversalLLM(),
+        workspace_config=workspace
+    )
+
+    planner_input = {
+        "task": "read hello.txt",
+        "context": "",
+        "k_recent_messages": [],
+        "tools": PLANNER_TOOL_DESCRIPTIONS,
+        "conversation_id": 1,
+        "step_index": 1,
+        "workspace_contents": []
+    }
+
+    msg = planner.run(planner_input)
+
+    assert msg.status == "failed"
+    assert "outside the workspace" in msg.response["error"] or "unsafe" in msg.response["error"]
+
+
+def test_replan_preserves_user_task_verbatim(tmp_path):
+    coordinator, workspace, planner, reviewer, workspace_root = build_test_system(tmp_path)
+
+    message = coordinator.start_workflow(
+        conversation_id=1,
+        user_task="create work.txt with hello"
+    )
+
+    message = approve_permission_if_needed(coordinator, message)
+    message = approve_permission_if_needed(coordinator, message)
+
+    assert len(planner.calls) == 2
+
+    original_task = "create work.txt with hello"
+    replan_input = planner.calls[1]
+
+    assert replan_input["task"] == original_task
+
+    # Use lower() so this test does not fail just because of capital letters.
+    assert "previous attempt was rejected" in replan_input["context"].lower()
+
+    # Reviewer feedback should be present in context.
+    assert "create_dir on unrelated_dir was not requested" in replan_input["context"]
+
+    # Reviewer feedback should NOT pollute the task field.
+    assert "create_dir on unrelated_dir was not requested" not in replan_input["task"]
