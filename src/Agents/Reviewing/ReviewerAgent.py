@@ -62,11 +62,13 @@ class ReviewerAgent(Agent):
             if not isinstance(issue, str):
                 raise ValueError("Each issue must be a string")
             
-    def build_review_evidence(self, executor_response: dict) -> dict:
+    def build_review_evidence(self, executor_response: dict, workspace_before: list = None, workspace_after: list = None) -> dict:
         """
             Builds the small clean object that the reviewer LLM is allowed to see.
             This hides architecture-only data such as rollback logs, approved actions,
             permission state, and internal execution state.
+            Now also includes workspace listings before/after so the reviewer can
+            verify negative claims like "deleted all files except X".
         """
         clean_steps = []
 
@@ -91,7 +93,9 @@ class ReviewerAgent(Agent):
 
         return {
             "goal": executor_response.get("goal", ""),
-            "steps": clean_steps
+            "steps": clean_steps,
+            "workspace_before": workspace_before or [],
+            "workspace_after": workspace_after or [],
         }
 
     def build_messages(self, user_task: str, review_evidence: dict) -> list[dict]:
@@ -110,17 +114,21 @@ class ReviewerAgent(Agent):
                             Only judge whether the clean execution evidence satisfies the CURRENT USER TASK above.
                             Do not judge old user messages, memory, rollback data, permission data, or unrelated prior tasks.
 
+                            Use 'workspace_before' and 'workspace_after' to verify negative or set-based claims
+                            such as "delete all files except X" or "remove every .txt file". If workspace_after
+                            matches what the task requested, ACCEPT, regardless of how many delete steps were used.
+
                             CLEAN EXECUTION EVIDENCE:
                             {json.dumps(review_evidence, indent=2)}
                             """
             }
         ]
 
-    def run(self, conversation_id: int, step_index: int, user_task: str, execution_response: dict) -> Message:
+    def run(self, conversation_id: int, step_index: int, user_task: str, execution_response: dict, workspace_before: list = None, workspace_after: list = None) -> Message:
         try:
             self.validate_input(user_task=user_task, execution_trace=execution_response, conversation_id=conversation_id, step_index=step_index)
 
-            review_evidence = self.build_review_evidence(execution_response)
+            review_evidence = self.build_review_evidence(execution_response, workspace_before=workspace_before, workspace_after=workspace_after)
             messages = self.build_messages(user_task=user_task, review_evidence=review_evidence)
 
             review_response = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)

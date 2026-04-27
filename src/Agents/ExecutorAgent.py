@@ -25,7 +25,8 @@ class ExecutorAgent(Agent):
             "rollback_log": [],
             "context": context,
             "recent_messages": recent_messages or [], #Depending on whether it is falsy or not
-            "user_task": user_task #pinned literal user task; executor injects it into LLM prompts to stop the planner from drifting
+            "user_task": user_task, #pinned literal user task; executor injects it into LLM prompts to stop the planner from drifting
+            "workspace_before": plan_response.get("workspace_before", [])
         }
     
     def is_execution_complete(self, execution_state: dict) -> bool:
@@ -57,7 +58,8 @@ class ExecutorAgent(Agent):
             "execution_trace": execution_state["execution_trace"],
             "step_results": execution_state["step_results"],
             "approved_actions": list(execution_state.get("approved_actions", set())),
-            "rollback_log": execution_state.get("rollback_log", [])
+            "rollback_log": execution_state.get("rollback_log", []),
+            "workspace_before": execution_state.get("workspace_before", [])
         }
     
     def validate_result(self, tool_name: str, result: Any):

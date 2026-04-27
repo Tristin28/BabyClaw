@@ -8,7 +8,9 @@ import json
 
 
 '''
-    This is the agent which manages workflow, and configures the respective agents i.e. it acts like the runner method
+    This is the agent which manages workflow, and configures the respective agents i.e. it acts like the runner method,
+    and it tries to enforce certain heuristic methods which try to help the model be restricted in the way it can think (try to plan out something deterministicly
+    this is because of hallucinations)
 '''
 class Coordinator():
     PLANNER_STEP = 1
@@ -433,7 +435,14 @@ class Coordinator():
 
         executor_response = executor_msg.response #will only contain messages with .status == "completed"
 
-        reviewer_msg = self.reviewer.run(conversation_id=conversation_id,step_index=self.REVIEWER_STEP, user_task = user_task, execution_response = executor_response)
+        #Reviewer needs to see the actual workspace state to verify set-based claims
+        #like "delete all files except X" — the trace alone is insufficient.
+        list_tree = self.tool_registry.get("list_tree", {}).get("func")
+        workspace_after = list_tree(path=".") if list_tree else []
+        workspace_before = executor_response.get("workspace_before", [])
+
+        reviewer_msg = self.reviewer.run(conversation_id=conversation_id, step_index=self.REVIEWER_STEP, user_task=user_task, 
+                                         execution_response=executor_response, workspace_before=workspace_before, workspace_after=workspace_after)
         self.memory.store_message(message=reviewer_msg)
 
         reviewer_response = reviewer_msg.response
@@ -745,7 +754,7 @@ class Coordinator():
 
     def is_likely_workspace_task(self, user_task: str) -> bool:
         """
-        Decides whether the task is clearly about workspace/file operations.
+        It is a heuristic method which helps the model decide whether the task is clearly about workspace/file operations.
 
         If this returns False, the Planner should only receive direct_response,
         because the user is probably chatting or asking a normal question.
