@@ -297,7 +297,7 @@ def build_system():
 
     planner = PlannerAgent(llm_client=llm_client, workspace_config=workspace)
     executor = ExecutorAgent(tool_registry=tool_registry)
-    reviewer = ReviewerAgent(llm_client=llm_client)
+    reviewer = ReviewerAgent(llm_client=llm_client, workspace_config=workspace)
     memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
     router = RouteAgent(llm_client=llm_client)
 

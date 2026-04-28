@@ -43,9 +43,16 @@ class ReviewerAgent(Agent):
         "copy_path"
     }
 
-    def __init__(self, llm_client: OllamaClient):
+    CONTENT_WRITING_TOOLS = {
+        "create_file",
+        "write_file",
+        "append_file"
+    }
+
+    def __init__(self, llm_client: OllamaClient, workspace_config=None):
         super().__init__("reviewer")
         self.llm_client = llm_client
+        self.workspace_config = workspace_config
 
     def validate_input(self, user_task: str, execution_trace: dict, conversation_id: int, step_index: int, route: dict = None):
         if not isinstance(user_task, str) or user_task.strip() == "":
@@ -105,6 +112,34 @@ class ReviewerAgent(Agent):
             "routing_reason": route.get("routing_reason", "")
         }
 
+    def read_final_file_content(self, path: str) -> dict:
+        """
+            Best-effort final content evidence for generated/written files.
+            Failure to read is returned as evidence instead of failing review.
+        """
+        if self.workspace_config is None:
+            return {"available": False, "reason": "Reviewer has no workspace_config."}
+
+        if not isinstance(path, str) or path.strip() == "":
+            return {"available": False, "reason": "No valid path was available."}
+
+        try:
+            file_path = self.workspace_config.resolve_workspace_path(path)
+
+            if not file_path.exists():
+                return {"available": False, "reason": "File does not exist in final workspace state."}
+
+            if not file_path.is_file():
+                return {"available": False, "reason": "Path is not a file in final workspace state."}
+
+            return {
+                "available": True,
+                "path": path,
+                "content": file_path.read_text(encoding="utf-8")
+            }
+        except Exception as e:
+            return {"available": False, "reason": str(e)}
+
     def build_review_evidence(self, executor_response: dict, workspace_before: list = None, workspace_after: list = None, route: dict = None) -> dict:
         """
             Builds the small clean object that the reviewer LLM is allowed to see.
@@ -118,21 +153,28 @@ class ReviewerAgent(Agent):
         clean_steps = []
 
         for step in executor_response.get("execution_trace", []):
+            tool_name = step.get("tool")
+            resolved_args = step.get("resolved_args", {})
+
             clean_step = {
                 "id": step.get("id"),
-                "tool": step.get("tool"),
+                "tool": tool_name,
                 "status": step.get("status"),
                 "args": step.get("args", {}),
             }
 
             if "resolved_args" in step:
-                clean_step["resolved_args"] = step["resolved_args"]
+                clean_step["resolved_args"] = resolved_args
 
             if "result" in step:
                 clean_step["result"] = step["result"]
 
             if "error" in step:
                 clean_step["error"] = step["error"]
+
+            if tool_name in self.CONTENT_WRITING_TOOLS:
+                clean_step["written_content"] = resolved_args.get("content", "")
+                clean_step["final_content"] = self.read_final_file_content(resolved_args.get("path"))
 
             clean_steps.append(clean_step)
 
@@ -210,16 +252,31 @@ class ReviewerAgent(Agent):
                             - Reject if requested files/folders are missing from workspace_after.
                             - Reject if the workspace changed even though the task was read-only.
 
+                            For topic-specific creation tasks:
+                            - Reject if the created content does not clearly relate to the requested topic.
+                            - Reject if the file is only a shallow scaffold, placeholder, vague future intention, unrelated content, or generic file.
+                            - Reject if the reviewer summary would need to describe the result using names/content that came from execution instead of the user task.
+                            - The review must compare the execution against the CURRENT USER TASK, not against the planner goal.
+                            - Do not accept only because a file/folder was created.
+                            - If the user asks for a program, game, app, pipeline, algorithm, script, document, project, or system, the created content must be a meaningful minimal version of that requested artifact.
+
                             For file content:
                             - If the task says a file should contain specific content, the content must appear in resolved_args.content or the final file state.
                             - If the task asks for a topic-specific file, the content must be about that topic.
                             - Do not accept generic content like "Hello world", "Project Name", "sample text", or placeholder text unless the user asked for it.
+                            - When final_content is present, judge the final saved content rather than tool success messages.
 
                             For route scope:
                             - If route_scope.allow_mutations is false, mutation tools should not have been used.
                             - If route_scope.allowed_tools is not empty, every executed tool must be inside allowed_tools.
 
                             Mutation tools are listed in 'mutation_tools'.
+
+                            Before deciding, internally check:
+                            - What did the user request?
+                            - What did the executor actually create, change, read, or answer?
+                            - What evidence in resolved_args, written_content, final_content, results, workspace_before, workspace_after, and workspace_diff proves the output satisfies the request?
+                            - What is missing, unsupported, generic, or unrelated?
 
                             If accepted is true, issues must be [].
                             If accepted is false, issues must clearly explain what was missing, wrong, extra, or out of scope.
@@ -266,8 +323,13 @@ class ReviewerAgent(Agent):
             if not used_real_mutation:
                 issues.append("The task was a workspace mutation, but no real workspace mutation tool was executed.")
 
-            if not created_paths and not deleted_paths:
-                issues.append("The task was a workspace mutation, but workspace_before and workspace_after show no workspace change.")
+            content_mutation_tools = {"write_file", "append_file", "replace_text"}
+
+            used_content_mutation = any(tool in content_mutation_tools for tool in executed_tools)
+
+            if not created_paths and not deleted_paths and not used_content_mutation:
+                issues.append("The task was a workspace mutation, but workspace_before and workspace_after show no " \
+                                "workspace path change, and no content-changing tool was executed.")
 
         return issues
     

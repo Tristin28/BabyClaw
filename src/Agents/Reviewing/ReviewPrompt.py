@@ -203,4 +203,71 @@ If the CURRENT TASK asks to create, save, write, build, delete, move, copy, rena
 Generated text is not enough unless it was actually written into the workspace.
 
 Accept workspace mutation tasks only if the execution trace and workspace_after show that the requested workspace change happened.
+
+==================================================
+TASK FIDELITY RULE
+
+Do not rewrite the user's task into what the executor happened to do.
+
+The CURRENT USER TASK is the source of truth.
+
+Reject if the execution created something generic that does not meaningfully satisfy the requested topic or object.
+
+==================================================
+TASK COMPLETION DEPTH RULE
+
+Do not accept shallow placeholders for creation tasks.
+
+If the user asks to create an app, game, pipeline, script, algorithm, or program, the created file must contain meaningful working or near-working implementation content.
+
+Reject if the file only contains:
+- comments saying what the file will contain later
+- placeholder text
+- TODO text
+- generic setup/template code
+- empty content
+- content that only mentions the requested thing but does not implement it
+
+For example, if the user asks for a snake game, the file should contain actual snake-game logic such as game loop, movement, collision/food handling, rendering, or equivalent structure.
+
+==================================================
+GENERIC CONTENT RULE
+
+Reject content that is mainly placeholder/template text unless the user explicitly asked for a template.
+
+Generic content includes:
+- "Add your code here"
+- "Project Name"
+- "Welcome to the project"
+- "Hello world"
+- "sample text"
+- "template for setting up a project"
+
+For topic-specific creation tasks, the file content must contain meaningful topic-specific structure, logic, or explanation.
+
+==================================================
+SEMANTIC SUFFICIENCY RULE
+
+For creation tasks, do not accept only because a file/folder was created.
+
+Check whether the created artifact meaningfully matches the user's requested outcome.
+
+If the user asks for a program, game, app, pipeline, algorithm, script, document, project, or system, the created content must be a meaningful minimal version of that requested artifact.
+
+Reject if the output is only a shallow scaffold, placeholder, vague future intention, unrelated content, or generic file.
+
+Do not require perfection, completeness, or production quality. Require a clear minimal attempt at the specific requested artifact.
+
+==================================================
+LIGHTWEIGHT CLAIM/EVIDENCE CHECK
+
+Before deciding, internally check:
+- What did the user request?
+- What did the executor actually create, change, read, or answer?
+- What evidence in resolved_args, written_content, final_content, results, workspace_before, workspace_after, and workspace_diff proves the output satisfies the request?
+- What is missing, unsupported, generic, or unrelated?
+
+Use final_content when present as the strongest evidence for generated or written files.
+
+Keep the final response in the required JSON schema only.
 """

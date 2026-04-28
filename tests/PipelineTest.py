@@ -21,7 +21,7 @@ class FakeMemory:
     def get_recent_conversation_messages(self, conversation_id: int, k: int = 5):
         return []
 
-    def store_long_term_memory(self, user_task: str, episode_summary: str, conversation_id: int, step_index: int):
+    def store_long_term_memory(self, user_task: str, conversation_id: int, step_index: int):
         return Message(
             conversation_id=conversation_id,
             step_index=step_index,
@@ -141,7 +141,7 @@ class FakeReviewer:
         }
 
     def run(self, conversation_id: int, step_index: int, user_task: str,
-            execution_response: dict, workspace_before=None, workspace_after=None):
+            execution_response: dict, workspace_before=None, workspace_after=None, route=None):
 
         self.calls.append({
             "user_task": user_task,
@@ -197,6 +197,28 @@ class FakeLLM:
         return "summary"
 
 
+class FakeRouter:
+    def __init__(self):
+        self.name = "router"
+
+    def run(self, conversation_id: int, step_index: int, user_task: str):
+        return Message(
+            conversation_id=conversation_id,
+            step_index=step_index,
+            sender="router",
+            receiver="coordinator",
+            target_agent=None,
+            message_type="route",
+            status="completed",
+            response={
+                "task_type": "workspace_mutation",
+                "confidence": 1.0,
+                "routing_reason": "Test task mutates the workspace."
+            },
+            visibility="internal"
+        )
+
+
 def build_test_system(tmp_path):
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
@@ -213,6 +235,7 @@ def build_test_system(tmp_path):
     executor = ExecutorAgent(tool_registry=tool_registry)
     reviewer = FakeReviewer()
     memory = FakeMemory()
+    router = FakeRouter()
 
     coordinator = Coordinator(
         planner=planner,
@@ -221,7 +244,8 @@ def build_test_system(tmp_path):
         memory=memory,
         planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
         tool_registry=tool_registry,
-        llm_client=llm
+        llm_client=llm,
+        router=router
     )
 
     return coordinator, workspace, planner, reviewer, workspace_root

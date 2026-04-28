@@ -272,29 +272,6 @@ Correct:
 generate_content
 create_file or write_file using content_step
 ==================================================
-OUTPUT FORMAT
-
-Return only valid JSON.
-
-The JSON must have this shape:
-
-{
-  "goal": "short goal",
-  "steps": [
-    {
-      "id": 1,
-      "tool": "tool_name",
-      "args": {}
-    }
-  ],
-  "planning_rationale": "short reason"
-}
-
-Do not include markdown.
-Do not include text outside JSON.
-Do not include depends_on.
-
-==================================================
 If the user asks to create a folder/file but does not provide an exact name, you may infer a short descriptive name from the current task.
 
 The inferred name must be grounded in the user's request.
@@ -313,4 +290,15 @@ Bad:
 - sample
 - example
 - placeholder
+
+==================================================
+IMPLEMENTATION TASK RULE
+
+If the user asks to create a program, game, app, pipeline, script, algorithm, or system inside a file, do not create placeholder content.
+
+The file content must be a meaningful implementation of the requested thing.
+
+If the implementation is too large, create a reasonable minimal version, but it must still be functional or structurally meaningful.
+
+Use generate_content first when meaningful content needs to be produced, then save it with create_file or write_file using content_step.
 """
