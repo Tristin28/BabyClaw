@@ -14,13 +14,14 @@
     Run with:
         python -m src.gui
 
-    Then open http://127.0.0.1:5000
+    The browser opens automatically at http://127.0.0.1:5000.
 """
 
 from pathlib import Path
 import json
 import sqlite3
 import threading
+import webbrowser
 
 from flask import Flask, jsonify, render_template, request
 
@@ -376,13 +377,18 @@ def respond_to_permission():
 
 
 def main():
+    host = "127.0.0.1"
+    port = 5000
+    url = f"http://{host}:{port}"
+
     print("\nBabyClaw GUI is starting.")
     print(f"Workspace: {WORKSPACE.root}")
     print(f"Memory DB: {DB_PATH}")
     print(f"Vector DB: {VECTOR_DIR}")
-    print("Open http://127.0.0.1:5000 in your browser.\n")
+    print(f"Opening {url} in your browser.\n")
 
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    threading.Timer(1.0, lambda: webbrowser.open_new(url)).start()
+    app.run(host=host, port=port, debug=False)
 
 
 if __name__ == "__main__":

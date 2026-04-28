@@ -5,3 +5,4 @@ __pycache__/
 chroma_db
 config/workspace_config.json
 app_paths.py
+workspace/
