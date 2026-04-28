@@ -74,23 +74,48 @@ class MemoryAgent(Agent):
             the user's name/friend/etc. on tasks where similarity search would
             never surface them.
         '''
+        results = self.vector_repo.get_all_memories()
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
+
+        grouped = {"user_fact": {}, "user_preference": {}}
+
+        for fact, meta in zip(docs, metas):
+            meta = meta or {}
+
+            memory_type = meta.get("memory_type")
+            topic = meta.get("topic", "")
+            timestamp = meta.get("timestamp", "")
+
+            if memory_type not in grouped:
+                continue
+
+            if not topic:
+                continue
+
+            existing = grouped[memory_type].get(topic)
+
+            if existing is None:
+                grouped[memory_type][topic] = (fact, timestamp)
+                continue
+
+            _, old_timestamp = existing
+
+            if timestamp > old_timestamp:
+                grouped[memory_type][topic] = (fact, timestamp)
+
         sections = []
 
-        for memory_type in ("user_fact", "user_preference"):
-            results = self.vector_repo.get_all_memories()
-            docs = results.get("documents") or []
-            metas = results.get("metadatas") or []
+        for memory_type, memories_by_topic in grouped.items():
+            if not memories_by_topic:
+                continue
 
-            by_topic = {}
-            for fact, meta in zip(docs, metas):
-                topic = (meta or {}).get("topic", "")
-                ts = (meta or {}).get("timestamp", "")
-                if topic not in by_topic or ts > by_topic[topic][1]:
-                    by_topic[topic] = (fact, ts)
+            lines = "\n".join(
+                f"- {fact}"
+                for fact, _ in memories_by_topic.values()
+            )
 
-            if by_topic:
-                lines = "\n".join(f"- {fact}" for fact, _ in by_topic.values())
-                sections.append(f"{memory_type}:\n{lines}")
+            sections.append(f"{memory_type}:\n{lines}")
 
         return "\n\n".join(sections)
     
@@ -263,6 +288,21 @@ class MemoryAgent(Agent):
                                 2. If the user did not explicitly state a stable fact/preference, return should_store=false and memories=[].
                                 3. Each memory must be short and reusable.
                                 4. The memory content must be grounded in the exact user task.
+
+                                A user message may contain two kinds of information:
+
+                                1. Stable memory-worthy information
+                                This includes facts or preferences about the user that may still be useful in future conversations.
+
+                                2. Temporary task instructions
+                                This includes what the user wants done right now, such as creating files, editing files, summarising text, running tools, or asking a one-time question.
+
+                                Store only the stable memory-worthy information.
+                                Do not store temporary task instructions.
+
+                                If both appear in the same message, separate them:
+                                - store the stable user fact/preference
+                                - ignore the temporary task instruction
                                 """
                 },
                 {
@@ -389,7 +429,15 @@ class MemoryAgent(Agent):
             "used to read",
             "prefers using tools",
             "current directory",
-            "hello.txt"
+            "hello.txt",
+            "not provided",
+            "not explicitly stated",
+            "should be stored",
+            "no other stable fact",
+            "latest message",
+            "not identified",
+            "unknown",
+            "not known"
         ]
 
         if topic in rejected_topics:

@@ -166,21 +166,32 @@ Do not reject only because:
 Reject only when the CURRENT TASK was not satisfied or an unrequested mutation happened.
 
 ==================================================
-OUTPUT FORMAT
+ROUTE SCOPE RULE
 
-Return only valid JSON.
+The route tells you what type of workflow the Coordinator allowed.
 
-The JSON must have:
+If route.allow_mutations is false, then any mutation tool usage should be rejected.
 
-{
-  "accepted": boolean,
-  "review_summary": "short explanation",
-  "issues": []
-}
+If route.allowed_tools is present, every executed tool should belong to that list.
 
-If accepted is true:
-- issues must be [].
+Reject if execution used tools outside the route scope.
 
-If accepted is false:
-- issues must contain concrete problems.
+This protects against cases where the Planner produced a tool that should not have been available for this task type.
+
+==================================================
+WORKSPACE BEFORE/AFTER RULE
+
+For file tasks, compare workspace_before and workspace_after.
+
+Accept only if the workspace change matches the CURRENT TASK.
+
+Reject if:
+- a file/folder was created but not requested,
+- a file/folder was deleted but not requested,
+- a file/folder was renamed/moved/copied but not requested,
+- the expected created/edited/deleted file is missing,
+- the workspace changed even though the task was read-only.
+
+Do not reject merely because timestamps or ordering changed.
+Focus on meaningful file/folder differences.
 """

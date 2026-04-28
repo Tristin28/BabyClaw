@@ -4,8 +4,10 @@ from src.message import Message
 from src.Agents.Reviewing.ReviewPrompt import REVIEWER_SYSTEM_PROMPT
 import json 
 
+
 class ReviewerAgent(Agent):
     REVIEWER_SYSTEM_PROMPT = REVIEWER_SYSTEM_PROMPT
+
     SCHEMA = {
         "type": "object",
         "properties": {
@@ -25,19 +27,35 @@ class ReviewerAgent(Agent):
                 }
             }
         },
-        "required": ["accepted", "review_summary", "issues"]
+        "required": ["accepted", "review_summary", "issues"],
+        "additionalProperties": False
+    }
+
+    MUTATION_TOOLS = {
+        "create_file",
+        "write_file",
+        "append_file",
+        "delete_file",
+        "replace_text",
+        "create_dir",
+        "delete_dir",
+        "move_path",
+        "copy_path"
     }
 
     def __init__(self, llm_client: OllamaClient):
         super().__init__("reviewer")
         self.llm_client = llm_client
 
-    def validate_input(self, user_task: str, execution_trace: dict, conversation_id: int, step_index: int):
+    def validate_input(self, user_task: str, execution_trace: dict, conversation_id: int, step_index: int, route: dict = None):
         if not isinstance(user_task, str) or user_task.strip() == "":
             raise ValueError("Reviewer input 'user_task' must be a non-empty string")
 
         if not isinstance(execution_trace, dict):
             raise ValueError("Reviewer input 'execution_trace' must be a dictionary")
+
+        if route is not None and not isinstance(route, dict):
+            raise ValueError("Reviewer input 'route' must be a dictionary")
 
         if not isinstance(conversation_id, int):
             raise ValueError("Reviewer input 'conversation_id' must be an integer")
@@ -61,14 +79,43 @@ class ReviewerAgent(Agent):
         for issue in review_response["issues"]:
             if not isinstance(issue, str):
                 raise ValueError("Each issue must be a string")
-            
-    def build_review_evidence(self, executor_response: dict, workspace_before: list = None, workspace_after: list = None) -> dict:
+
+        # If reviewer accepts the workflow, there should not be any issues left.
+        if review_response["accepted"] and review_response["issues"]:
+            raise ValueError("Reviewer accepted the result but still returned issues.")
+
+        # If reviewer rejects the workflow, it should explain why.
+        if not review_response["accepted"] and not review_response["issues"]:
+            raise ValueError("Reviewer rejected the result but did not return any issues.")
+
+    def build_clean_route(self, route: dict = None) -> dict:
+        """
+            Builds the small clean route object that the reviewer LLM is allowed to see.
+            This lets the reviewer check whether the executor stayed inside the scope
+            which the coordinator allowed for this current task.
+        """
+        route = route or {}
+
+        return {
+            "task_type": route.get("task_type"),
+            "tool_group": route.get("tool_group"),
+            "use_workspace": route.get("use_workspace"),
+            "allow_mutations": route.get("allow_mutations"),
+            "allowed_tools": route.get("allowed_tools", []),
+            "routing_reason": route.get("routing_reason", "")
+        }
+
+    def build_review_evidence(self, executor_response: dict, workspace_before: list = None, workspace_after: list = None, route: dict = None) -> dict:
         """
             Builds the small clean object that the reviewer LLM is allowed to see.
             This hides architecture-only data such as rollback logs, approved actions,
             permission state, and internal execution state.
             Now also includes workspace listings before/after so the reviewer can
             verify negative claims like "deleted all files except X".
+
+            It also includes the route scope so the reviewer can check that the
+            executor did not use tools which were outside of what the coordinator
+            allowed for this current task.
         """
         clean_steps = []
 
@@ -93,6 +140,8 @@ class ReviewerAgent(Agent):
 
         return {
             "goal": executor_response.get("goal", ""),
+            "route_scope": self.build_clean_route(route=route),
+            "mutation_tools": sorted(self.MUTATION_TOOLS),
             "steps": clean_steps,
             "workspace_before": workspace_before or [],
             "workspace_after": workspace_after or [],
@@ -114,9 +163,18 @@ class ReviewerAgent(Agent):
                             Only judge whether the clean execution evidence satisfies the CURRENT USER TASK above.
                             Do not judge old user messages, memory, rollback data, permission data, or unrelated prior tasks.
 
+                            Use the actual executed steps, resolved_args, and results to decide whether the task was completed.
+                            Do not accept just because the goal sounds correct. The actual tool execution must match the current task.
+
                             Use 'workspace_before' and 'workspace_after' to verify negative or set-based claims
                             such as "delete all files except X" or "remove every .txt file". If workspace_after
                             matches what the task requested, ACCEPT, regardless of how many delete steps were used.
+
+                            Use 'route_scope' to verify that execution stayed inside the coordinator-approved scope.
+                            If route_scope.allow_mutations is false, then mutation tools should not have been used.
+                            If route_scope.allowed_tools is not empty, every executed tool must be inside allowed_tools.
+
+                            Mutation tools are listed in 'mutation_tools'.
 
                             CLEAN EXECUTION EVIDENCE:
                             {json.dumps(review_evidence, indent=2)}
@@ -124,11 +182,14 @@ class ReviewerAgent(Agent):
             }
         ]
 
-    def run(self, conversation_id: int, step_index: int, user_task: str, execution_response: dict, workspace_before: list = None, workspace_after: list = None) -> Message:
+    def run(self, conversation_id: int, step_index: int, user_task: str, execution_response: dict, workspace_before: list = None, workspace_after: list = None,
+            route: dict = None) -> Message:
         try:
-            self.validate_input(user_task=user_task, execution_trace=execution_response, conversation_id=conversation_id, step_index=step_index)
+            self.validate_input(user_task=user_task, execution_trace=execution_response, conversation_id=conversation_id, step_index=step_index, route=route)
 
-            review_evidence = self.build_review_evidence(execution_response, workspace_before=workspace_before, workspace_after=workspace_after)
+            review_evidence = self.build_review_evidence(executor_response=execution_response, workspace_before=workspace_before,
+                                                         workspace_after=workspace_after, route=route)
+            
             messages = self.build_messages(user_task=user_task, review_evidence=review_evidence)
 
             review_response = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
@@ -146,5 +207,5 @@ class ReviewerAgent(Agent):
             status = "failed"
             target_agent = None
 
-        return self.get_message(conversation_id=conversation_id, step_index=step_index, receiver="coordinator", target_agent=target_agent, message_type="review_result",
-                                status=status, response=review_response, visibility="internal")
+        return self.get_message(conversation_id=conversation_id, step_index=step_index, receiver="coordinator", target_agent=target_agent,
+                                message_type="review_result", status=status, response=review_response, visibility="internal")

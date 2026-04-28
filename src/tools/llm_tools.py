@@ -39,7 +39,7 @@ def create_summarise_txt_func(llm: OllamaClient) -> Callable[[str], str]:
 
     return summarise_txt
 
-def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", recent_messages: list[dict] = None) -> str:
+def direct_response(llm_client: OllamaClient, prompt: str, context: str = "", recent_messages: list[dict] = None) -> str:
     """
         This tool is used when the user wants a normal chatbot-style answer, such as greetings, explanations, email drafts, advice, rewrites, or
         questions about previous conversation.
@@ -52,6 +52,14 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
 
     recent_messages = recent_messages or []
 
+    if context is None:
+        context = ""
+
+    if isinstance(context, list):
+        context = "\n".join(str(item) for item in context)
+
+    context = str(context).strip()
+
     messages = [
         {
             "role": "system",
@@ -59,13 +67,14 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
                 "You are the final response generator for an AI agent system.\n"
                 "\n"
                 "Hard rules:\n"
-                "1. Answer ONLY the text inside <CURRENT_PROMPT>...</CURRENT_PROMPT>.\n"
-                "2. Do NOT repeat, continue, restate, or act on any earlier task in the recent conversation.\n"
-                "3. Do NOT describe what you would do; just answer.\n"
-                "4. Do NOT mention files, tools, plans, or workflow unless the current prompt explicitly asks about them.\n"
-                "5. Use 'Relevant memory' and 'Recent conversation' ONLY to answer the current prompt. If they are unrelated, ignore them.\n"
-                "6. If the answer is not present in memory or the prompt itself, say you do not know. Do not guess.\n"
-                "7. Keep the response short and direct."
+                "1. The text inside <CURRENT_PROMPT>...</CURRENT_PROMPT> is the user's current question/task.\n"
+                "2. Answer the current prompt using Relevant memory when it directly contains the answer.\n"
+                "3. Use Recent conversation only when the current prompt clearly depends on it.\n"
+                "4. Do NOT repeat, continue, restate, or act on any earlier task unless the current prompt asks for that.\n"
+                "5. Do NOT mention files, tools, plans, or workflow unless the current prompt explicitly asks about them.\n"
+                "6. If Relevant memory contains the answer, use it directly.\n"
+                "7. If the answer is not present in the prompt, Relevant memory, or needed recent conversation, say you do not know. Do not guess.\n"
+                "8. Keep the response short and direct."
             )
         }
     ]
@@ -73,7 +82,11 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
     if context:
         messages.append({
             "role": "system",
-            "content": f"Relevant memory (use only if it answers the current prompt):\n{context}"
+            "content": (
+                "Relevant memory:\n"
+                f"{context}\n\n"
+                "Use this only if it directly helps answer <CURRENT_PROMPT>."
+            )
         })
 
     if recent_messages:
@@ -85,8 +98,9 @@ def direct_response(llm_client: OllamaClient,prompt: str, context: str = "", rec
         messages.append({
             "role": "system",
             "content": (
-                "Recent conversation (background only, NOT a task to continue):\n"
-                f"{conversation_text}"
+                "Recent conversation:\n"
+                f"{conversation_text}\n\n"
+                "This is background only. Do not continue it unless <CURRENT_PROMPT> clearly asks you to."
             )
         })
 

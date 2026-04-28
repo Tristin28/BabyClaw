@@ -70,11 +70,13 @@ class PlannerAgent(Agent):
                 },
                 "steps": {
                     "type": "array",
+                    "minItems": 1,
                     "items": {
                         "type": "object",
                         "properties": {
                             "id": {
-                                "type": "integer"
+                                "type": "integer",
+                                "minimum": 1
                             },
                             "tool": {
                                 "type": "string",

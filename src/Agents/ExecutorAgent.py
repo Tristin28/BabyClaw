@@ -3,16 +3,31 @@ from src.message import Message
 from typing import Any
 
 class ExecutorAgent(Agent):
+    MUTATION_TOOLS = {
+            "create_file",
+            "write_file",
+            "append_file",
+            "delete_file",
+            "replace_text",
+            "create_dir",
+            "delete_dir",
+            "move_path",
+            "copy_path"
+    }
+    
     def __init__(self, tool_registry: dict):
         super().__init__("executor")
         self.tool_registry = tool_registry #setting as an instance field so that sets of tools can be exchanged depending on what user enables, i.e. coord sets it
 
-    def initialise_execution_state(self, plan_response: dict, context: str = "", recent_messages: list[dict] = None, user_task: str = "") -> dict:
+    def initialise_execution_state(self, plan_response: dict, context: str = "", recent_messages: list[dict] = None,  
+                                   user_task: str = "", route: dict = None) -> dict:
         ''' 
             Initialisting an execution state so that the coordinator would be the one which keeps track of the steps running,
             this is done so that it interleaves with the executor and if any runnable steps are to have permission it asks the user before it executes the
             respective tools.
         '''
+        route = route or plan_response.get("route", {}) or {}
+
         return {
             "goal": plan_response["goal"],
             "remaining_steps": plan_response["steps"][:], #Copying the list so that we dont remove elements from the actual step list too (since mutable)
@@ -25,7 +40,10 @@ class ExecutorAgent(Agent):
             "context": context,
             "recent_messages": recent_messages or [], #Depending on whether it is falsy or not
             "user_task": user_task, #pinned literal user task; executor injects it into LLM prompts to stop the planner from drifting
-            "workspace_before": plan_response.get("workspace_before", [])
+            "workspace_before": plan_response.get("workspace_before", []),
+             "route": route,
+            "allowed_tools": set(route.get("allowed_tools", [])),
+            "allow_mutations": bool(route.get("allow_mutations", False))
         }
     
     def is_execution_complete(self, execution_state: dict) -> bool:
@@ -69,6 +87,26 @@ class ExecutorAgent(Agent):
         if tool_name in NON_EMPTY_STRING_TOOLS:
             if not isinstance(result, str) or result.strip() == "":
                 raise ValueError(f"Tool '{tool_name}' returned an empty string")
+            
+    def validate_step_scope(self, step: dict, execution_state: dict):
+        """
+            Blocks plans that try to execute tools outside the Coordinator route.
+
+            This is not hard-coding tasks.
+            This is enforcing the workflow contract.
+        """
+
+        tool_name = step["tool"]
+        allowed_tools = execution_state.get("allowed_tools", set())
+
+        if allowed_tools and tool_name not in allowed_tools:
+            raise ValueError(
+                f"Tool '{tool_name}' is outside the allowed route scope. "
+                f"Allowed tools: {sorted(allowed_tools)}"
+            )
+
+        if tool_name in self.MUTATION_TOOLS and not execution_state.get("allow_mutations", False):
+            raise ValueError(f"Tool '{tool_name}' mutates the workspace, but the current route does not allow mutations.")
             
     def execute_tools(self, execution_state: dict, runnable_steps: list[dict]) -> dict:
         #Making use of mutability, as dict object is mutable then if some changes happen by any reference all other pointers pointing to respective obj will see the change
@@ -126,6 +164,8 @@ class ExecutorAgent(Agent):
 
         if tool_name not in self.tool_registry:
             raise ValueError(f"Unknown tool {tool_name}")
+        
+        self.validate_step_scope(step=plan_output_step, execution_state=execution_state)
         
         tool_def = self.tool_registry[tool_name]
 

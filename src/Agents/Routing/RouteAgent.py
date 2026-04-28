@@ -11,70 +11,97 @@ class RouteAgent(Agent):
                 "enum": ["direct_response", "memory_question", "contextual_followup",
                          "workspace_read", "workspace_summarise", "workspace_mutation"]
             },
-            "tool_group": {
-                "type": "string",
-                "enum": ["direct_response_tools", "read_file_tools",
-                         "summarise_file_tools", "mutation_file_tools"]
+            "confidence": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0
             },
-            "memory_mode": {
-                "type": "string",
-                "enum": ["none", "pinned_only", "relevant_only", "full"]
-            },
-            "use_recent_messages": {"type": "boolean"},
-            "use_workspace": {"type": "boolean"},
-            "routing_reason": {"type": "string"},
+            "routing_reason": {
+                "type": "string"
+            }
         },
-        "required": ["task_type", "tool_group", "memory_mode",
-                     "use_recent_messages", "use_workspace", "routing_reason"],
-        "additionalProperties": False,
+        "required": ["task_type", "confidence", "routing_reason"],
+        "additionalProperties": False
     }
 
+
     SYSTEM_PROMPT = """
-            You are a deterministic ROUTING AGENT. Your only job is to classify the current user task.
-            You do NOT plan, execute, or answer the user. You output ONLY structured JSON.
+                You are the Routing Agent.
 
-            Choose ONE task_type:
+                Your only job is to classify the user's CURRENT TASK.
 
-            - direct_response: chat, explanations, advice, drafts, code in chat, writing letters/emails IN CHAT.
-            Examples: "explain recursion", "write me a letter", "write bubble sort code", "draft an email to John"
+                You do not answer the user.
+                You do not plan.
+                You do not choose tools.
+                You do not decide permissions.
+                You only classify the task type.
 
-            - memory_question: user asks about stored personal facts/preferences.
-            Examples: "what is my name?", "what do you remember about me?"
+                Choose exactly one task_type:
 
-            - contextual_followup: user clearly refers to prior conversation.
-            Examples: "continue", "same as before", "use that result", "do it again"
+                1. direct_response
+                Use this for normal chat, explanations, advice, writing text in chat,
+                rewriting, coding in chat, or answering questions.
 
-            - workspace_read: read/show/open/list/find/search workspace files/folders.
-            Examples: "read notes.txt", "list files", "find hello.txt"
+                Examples:
+                - explain recursion
+                - write me a letter
+                - write bubble sort in Python
+                - improve this paragraph
+                - what is reinforcement learning?
 
-            - workspace_summarise: summarise/explain/shorten an existing workspace file.
-            Examples: "summarise notes.txt", "explain README.md"
+                2. memory_question
+                Use this when the user asks about remembered facts or preferences.
 
-            - workspace_mutation: create/write/save/append/edit/replace/delete/move/copy/rename files/folders.
-            Examples: "create notes.txt", "save this into output.md", "delete test.py"
+                Examples:
+                - what is my name?
+                - what do you remember about me?
+                - what do you know about my project?
 
-            CRITICAL RULES:
-            - "write a letter" alone is direct_response. Only workspace_mutation if the user names a file
-            (e.g. "save the letter as letter.txt").
-            - Do not infer file operations from chat tasks.
+                3. contextual_followup
+                Use this when the task clearly depends on previous conversation.
 
-            tool_group must match task_type:
-            - direct_response, memory_question, contextual_followup -> direct_response_tools
-            - workspace_read -> read_file_tools
-            - workspace_summarise -> summarise_file_tools
-            - workspace_mutation -> mutation_file_tools
+                Examples:
+                - continue
+                - do the same thing again
+                - use the previous result
+                - fix that
+                - explain it further
 
-            memory_mode:
-            - none: workspace_read, workspace_summarise, workspace_mutation
-            - pinned_only: direct_response, memory_question
-            - full: contextual_followup
-            - relevant_only: rare, only when user explicitly references project history
+                4. workspace_read
+                Use this when the user wants to read, show, find, list, or search files/folders.
 
-            use_recent_messages: true ONLY for contextual_followup. Otherwise false.
-            use_workspace: true ONLY for workspace_read/summarise/mutation. Otherwise false.
+                Examples:
+                - read notes.txt
+                - list the files
+                - find hello.txt
+                - search for TODO
 
-            routing_reason: one short sentence justifying the classification.
-            """
+                5. workspace_summarise
+                Use this when the user wants to summarise, explain, shorten, or describe an existing file.
+
+                Examples:
+                - summarise notes.txt
+                - explain README.md
+                - shorten this file
+
+                6. workspace_mutation
+                Use this when the user asks to create, save, write, append, edit, replace,
+                delete, move, copy, or rename files/folders.
+
+                Examples:
+                - create test.txt with hello
+                - save this as output.md
+                - append hello to notes.txt
+                - delete old.txt
+                - rename a.txt to b.txt
+
+                Important:
+                - "write a letter" is direct_response unless the user asks to save it into a file.
+                - "write code" is direct_response unless the user asks to create/save a file.
+                - Do not infer file operations unless the user clearly asks for a file/folder/path operation.
+
+                Return only valid JSON.
+                """
 
     def __init__(self, llm_client: OllamaClient):
         super().__init__("router")
@@ -92,8 +119,14 @@ class RouteAgent(Agent):
             response = self.llm_client.invoke_json(messages=messages, stream=False, schema=RouteAgent.SCHEMA)
             status = "completed"
         except Exception as e:
-            response = {"error": str(e)}
+            response = {
+                "error": str(e),
+                "task_type": "direct_response",
+                "confidence": 0.0,
+                "routing_reason": "Router failed, so safe fallback should be used."
+            }
             status = "failed"
+
 
         return self.get_message(conversation_id=conversation_id, step_index=step_index,
                                 receiver="coordinator", target_agent=None,

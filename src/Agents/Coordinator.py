@@ -3,6 +3,7 @@ from src.Agents.ExecutorAgent import ExecutorAgent
 from src.Agents.MemoryAgent import MemoryAgent
 from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
 from src.Agents.Routing.RouteAgent import RouteAgent
+from src.Agents.Routing.WorkflowPolicy import WorkflowPolicyRegistry
 from src.message import Message
 from src.OllamaClient import OllamaClient
 import json
@@ -70,7 +71,7 @@ class Coordinator():
     def build_planner_input(self, user_task: str, route: dict, conversation_id: int, step_index: int, replan_feedback: str = "") -> dict:
         scoped_context = self.build_scoped_context(user_task, route)
         if replan_feedback:
-            scoped_context = f"{scoped_context}\n\n{replan_feedback}" if scoped_context else replan_feedback
+            scoped_context = f"{scoped_context}\n\nREPLAN CONTEXT\n{replan_feedback}" if scoped_context else f"REPLAN CONTEXT:\n{replan_feedback}"
 
         scoped_recent_messages = self.build_scoped_recent_messages(conversation_id, route)
         selected_tools = self.select_tools_for_route(route)
@@ -113,34 +114,27 @@ class Coordinator():
                 
                 #Giving the planner retry some feedback about why the previous plan failed compilation
                 retry_planner_input["context"] += f"""
-                    Previous planning attempt failed during compilation.
 
-                    Compiler error:
-                    {error}
+                REPLAN CONTEXT:
+                The previous plan failed compilation.
 
-                    Fix only the structure of the plan.
-                    The current task is still:
-                    {retry_planner_input["task"]}
+                Compiler error:
+                {error}
 
-                    Important correction rule:
-                    If a value comes from a previous step, use the argument name ending in _step.
+                Fix the plan structure only.
 
-                    Correct:
-                    {{"content_step": 1}}
-                    {{"text_step": 1}}
-                    {{"path_step": 1}}
+                Rules:
+                - Keep the original CURRENT TASK unchanged.
+                - Use only available tools.
+                - Do not invent files, paths, or content.
+                - Use direct args when the value is known from the current task.
+                - Use *_step only when the value comes from an earlier step.
+                - *_step must reference an earlier integer step id.
+                - Do not add unrelated steps.
+                """
 
-                    Wrong:
-                    {{"content": "text_step:1"}}
-                    {{"text": 1}}
-
-                    For example:
-                    If step 2 creates a file using the contents from step 1, use:
-                    {{"path": "BabyClaw", "content_step": 1}}
-                    """
             return planner_msg  #failed after retries
 
-    
 
     def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict,
                                       executor_response: dict, reviewer_response: dict, approved_actions: set) -> Message:
@@ -177,10 +171,9 @@ class Coordinator():
         new_plan_response["route"] = route
         new_plan_response["workspace_before"] = self.tool_registry["list_tree"]["func"](path=".")
 
-        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response,
-                                                                    context=planner_input["context"],
-                                                                    recent_messages=planner_input["k_recent_messages"],
-                                                                    user_task=user_task)
+        execution_state = self.executor.initialise_execution_state(plan_response=new_plan_response, context=planner_input["context"], 
+                                                                   recent_messages=planner_input["k_recent_messages"], user_task=user_task, route=route)
+        
         if approved_actions:
             execution_state["approved_actions"] = approved_actions
 
@@ -220,7 +213,12 @@ class Coordinator():
         display_outputs = [step.get("result") for step in trace if step.get("tool") in display_tools and step.get("status") == "completed" 
                            and step.get("result") is not None]
         
-        display_result = direct_outputs[-1] if direct_outputs else (display_outputs[-1] if display_outputs else None)
+        if direct_outputs:
+            display_result = direct_outputs[-1]
+        elif display_outputs:
+            display_result = "\n".join(str(output) for output in display_outputs)
+        else:
+            display_result = None
 
         if display_result is not None:
             self.memory.store_message(Message(conversation_id=conversation_id, step_index=step_index, sender="assistant", receiver="user", 
@@ -305,10 +303,9 @@ class Coordinator():
         plan_response["route"] = route
         plan_response["workspace_before"] = self.tool_registry["list_tree"]["func"](path=".")
 
-        execution_state = self.executor.initialise_execution_state(plan_response=plan_response,
-                                                                    context=planner_input["context"],
-                                                                    recent_messages=planner_input["k_recent_messages"],
-                                                                    user_task=user_task)
+        execution_state = self.executor.initialise_execution_state(plan_response=plan_response, context=planner_input["context"], 
+                                                                   recent_messages=planner_input["k_recent_messages"], user_task=user_task, route=route)
+        
         executor_msg = self.run_execution_loop(conversation_id=conversation_id, execution_state=execution_state,
                                                start_step_index=self.EXECUTOR_STEP, user_task=user_task,
                                                plan_response=plan_response)
@@ -344,7 +341,8 @@ class Coordinator():
         workspace_before = executor_response.get("workspace_before", [])
 
         reviewer_msg = self.reviewer.run(conversation_id=conversation_id, step_index=self.REVIEWER_STEP, user_task=user_task, 
-                                         execution_response=executor_response, workspace_before=workspace_before, workspace_after=workspace_after)
+                                         execution_response=executor_response, workspace_before=workspace_before, workspace_after=workspace_after,
+                                         route=plan_response.get("route", {}))
         self.memory.store_message(message=reviewer_msg)
 
         reviewer_response = reviewer_msg.response
@@ -578,6 +576,7 @@ class Coordinator():
                 "step_id": step["id"],
                 "tool": tool_name,
                 "args": step["args"],
+                "resolved_args": self.executor.resolve_step_args_for_permission(step=step,execution_state=execution_state),
                 "description": description
             })
 
@@ -628,66 +627,67 @@ class Coordinator():
         return rollback_results
     
     def validate_route(self, route: dict) -> dict:
-        '''
-            Enforces deterministic route contracts. If router output violates a contract, fall back to safe defaults.
-        '''
-        if not isinstance(route, dict) or "task_type" not in route:
-            return dict(self.SAFE_FALLBACK_ROUTE)
+        """
+            Kept for compatibility, but route validation is now just rebuilding
+            from task_type using infrastructure-owned policy.
+        """
 
-        task_type = route.get("task_type")
-        contract = self.VALID_ROUTE_CONTRACTS.get(task_type)
-
-        if contract is None:
-            return dict(self.SAFE_FALLBACK_ROUTE)
-
-        if route.get("tool_group") != contract["tool_group"]:
-            return dict(self.SAFE_FALLBACK_ROUTE)
-
-        if route.get("use_workspace") != contract["use_workspace"]:
-            return dict(self.SAFE_FALLBACK_ROUTE)
-
-        if route.get("memory_mode") not in {"none", "pinned_only", "relevant_only", "full"}:
-            return dict(self.SAFE_FALLBACK_ROUTE)
-
-        if not isinstance(route.get("use_recent_messages"), bool):
-            return dict(self.SAFE_FALLBACK_ROUTE)
-
-        return route
+        return WorkflowPolicyRegistry.build_route(route)
 
     def select_tools_for_route(self, route: dict) -> list[dict]:
-        tool_group = route["tool_group"]
+        allowed_tools = set(route.get("allowed_tools", []))
 
-        if tool_group == "direct_response_tools":
-            allowed = self.DIRECT_RESPONSE_TOOLS
-        elif tool_group == "read_file_tools":
-            allowed = self.READ_FILE_TOOLS
-        elif tool_group == "summarise_file_tools":
-            allowed = self.SUMMARISE_FILE_TOOLS
-        elif tool_group == "mutation_file_tools":
-            allowed = self.MUTATION_FILE_TOOLS
-        else:
-            allowed = self.DIRECT_RESPONSE_TOOLS
+        if not allowed_tools:
+            allowed_tools = WorkflowPolicyRegistry.DIRECT_RESPONSE_TOOLS
 
-        return [t for t in self.planner_tool_descriptions if t["name"] in allowed]
+        return [tool for tool in self.planner_tool_descriptions if tool["name"] in allowed_tools]
 
     def build_scoped_context(self, user_task: str, route: dict) -> str:
-        return self.memory.get_memory_by_mode(task=user_task, mode=route["memory_mode"], k=5)
+        # Workspace tasks should not receive memory by default because it can
+        # cause the planner to mix old tasks with the current file operation.
+        if route.get("task_type") in {"workspace_read", "workspace_summarise", "workspace_mutation"}:
+            return ""
+
+        context = self.memory.get_memory_by_mode(task=user_task, mode=route.get("memory_mode", "none"), k=5)
+
+        if context is None:
+            return ""
+
+        if isinstance(context, list):
+            return "\n".join(str(item) for item in context)
+
+        return str(context)
 
     def build_scoped_recent_messages(self, conversation_id: int, route: dict) -> list[dict]:
         if not route["use_recent_messages"]:
             return []
+        
         return self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=5)
 
     def build_scoped_workspace_contents(self, route: dict):
         if not route["use_workspace"]:
             return []
+        
+        list_tree = self.tool_registry.get("list_tree", {}).get("func")
+        if list_tree:
+            return list_tree(path=".")
+        
         return self.tool_registry["list_dir"]["func"](path=".")
 
     def run_router(self, conversation_id: int, user_task: str) -> dict:
+        '''
+            Router only classifies the task.
+            Coordinator converts that classification into a scoped workflow route.
+        '''
+
         route_msg = self.router.run(conversation_id=conversation_id, step_index=self.ROUTER_STEP, user_task=user_task)
         self.memory.store_message(route_msg)
 
         if route_msg.status != "completed":
-            return dict(self.SAFE_FALLBACK_ROUTE)
+            return WorkflowPolicyRegistry.build_route({
+                "task_type": "direct_response",
+                "confidence": 0.0,
+                "routing_reason": "Router failed, so Coordinator used safe fallback."
+            })
 
-        return self.validate_route(route_msg.response)
+        return WorkflowPolicyRegistry.build_route(route_msg.response)
