@@ -473,9 +473,34 @@ class MemoryAgent(Agent):
 
         if mode == "full":
             pinned = self.get_pinned_facts_text()
-            relevant = self.get_relevant_memory(task=task, k=k)
-            if pinned and relevant:
-                return f"{pinned}\n\n{relevant}"
-            return pinned or relevant
+            relevant = self.get_task_relevant_memory_only(task=task, k=k)
+
+            sections = []
+
+            if pinned:
+                sections.append(f"Known about the user:\n{pinned}")
+
+            if relevant:
+                sections.append(f"Task-relevant memory:\n{relevant}")
+
+            return "\n\n".join(sections)
 
         return ""
+    
+    def get_task_relevant_memory_only(self, task: str, k: int) -> str:
+        results = self.vector_repo.retrieve_relevant_memory(task=task, k=k)
+
+        documents_outer = results.get("documents") or []
+
+        if not documents_outer or not documents_outer[0]:
+            return ""
+
+        retrieved_memories = results["documents"][0]
+        distances = results["distances"][0]
+        meta_data = results["metadatas"][0]
+
+        candidates = [(fact, meta) for fact, dist, meta in zip(retrieved_memories, distances, meta_data) if dist <= MemoryAgent.RELEVANCE_THRESHOLD]
+
+        filtered_candidates = self.resolve_conflicts(candidates=candidates)
+
+        return "\n".join(fact for fact, _ in filtered_candidates)
