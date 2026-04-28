@@ -861,10 +861,6 @@
             btn.addEventListener("click", () => switchTab(btn.dataset.tab));
         }
 
-        document.getElementById("plans-refresh").addEventListener("click", refreshPlans);
-        document.getElementById("memory-refresh").addEventListener("click", refreshMemory);
-        document.getElementById("settings-refresh").addEventListener("click", loadState);
-
         document.getElementById("settings-workspace-set").addEventListener("click", () => {
             const path = document.getElementById("settings-workspace-input").value.trim();
             changeWorkspace(path);

@@ -10,6 +10,7 @@ from src.Agents.ExecutorAgent import ExecutorAgent
 from src.Agents.MemoryAgent import MemoryAgent
 from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
 from src.Agents.Coordinator import Coordinator
+from src.Agents.Routing.RouteAgent import RouteAgent
 
 from src.OllamaClient import OllamaClient
 from src.Memory.sql_database import DatabaseManager
@@ -294,10 +295,11 @@ def build_system():
         "tools": list(tool_registry.keys())
     })
 
-    planner = PlannerAgent(llm_client=llm_client)
+    planner = PlannerAgent(llm_client=llm_client, workspace_config=workspace)
     executor = ExecutorAgent(tool_registry=tool_registry)
     reviewer = ReviewerAgent(llm_client=llm_client)
     memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
+    router = RouteAgent(llm_client=llm_client)
 
     coordinator = Coordinator(
         planner=planner,
@@ -307,6 +309,7 @@ def build_system():
         planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
         tool_registry=tool_registry,
         llm_client=llm_client,
+        router = router
     )
 
     debug_print("BabyClaw system built successfully")
