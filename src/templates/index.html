@@ -87,10 +87,43 @@
 
         .workspace button:hover { border-color: var(--accent); }
 
-        #chat {
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            background: var(--panel);
+        }
+
+        .tabs button {
+            flex: 1;
+            background: transparent;
+            color: var(--muted);
+            border: none;
+            border-bottom: 2px solid transparent;
+            padding: 12px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .tabs button:hover { color: var(--text); }
+
+        .tabs button.active {
+            color: var(--text);
+            border-bottom-color: var(--accent);
+        }
+
+        .tab-pane {
+            display: none;
             flex: 1;
             overflow-y: auto;
             padding: 20px;
+        }
+
+        .tab-pane.active { display: flex; flex-direction: column; }
+
+        #chat {
+            flex: 1;
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
             gap: 12px;
@@ -247,6 +280,108 @@
 
         .toast.show { opacity: 1; transform: translateY(0); }
         .toast.error { border-color: var(--error); color: #ffd2d0; }
+
+        .pane-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .pane-toolbar h2 {
+            margin: 0;
+            font-size: 14px;
+            letter-spacing: 0.4px;
+        }
+
+        .pane-toolbar button {
+            background: var(--panel-2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: inherit;
+        }
+
+        .pane-toolbar button:hover { border-color: var(--accent); }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+
+        .card .card-meta {
+            color: var(--muted);
+            font-size: 11px;
+            margin-bottom: 6px;
+        }
+
+        .card .card-title {
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .card pre {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 12px;
+            overflow-x: auto;
+            margin: 6px 0 0 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        .empty {
+            color: var(--muted);
+            font-style: italic;
+            text-align: center;
+            padding: 24px;
+        }
+
+        .settings-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            gap: 12px;
+        }
+
+        .settings-row:last-child { border-bottom: none; }
+
+        .settings-row .label {
+            color: var(--muted);
+            font-size: 12px;
+            min-width: 120px;
+        }
+
+        .settings-row .value {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12px;
+            word-break: break-all;
+            flex: 1;
+        }
+
+        .badge {
+            display: inline-block;
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 11px;
+            margin-left: 6px;
+        }
+
+        .badge.completed { color: var(--success); border-color: var(--success); }
+        .badge.failed { color: var(--error); border-color: var(--error); }
+        .badge.cancelled { color: var(--warn); border-color: var(--warn); }
     </style>
 </head>
 <body>
@@ -262,8 +397,63 @@
             </div>
         </header>
 
-        <div id="chat">
-            <div class="msg system">Type a task below. The planner, executor, reviewer and memory agents will work together to handle it.</div>
+        <div class="tabs">
+            <button data-tab="chat" class="active">Chat</button>
+            <button data-tab="plans">Plans</button>
+            <button data-tab="memory">Memory</button>
+            <button data-tab="settings">Settings</button>
+        </div>
+
+        <div id="tab-chat" class="tab-pane active">
+            <div id="chat">
+                <div class="msg system">Type a task below. The planner, executor, reviewer and memory agents will work together to handle it.</div>
+            </div>
+        </div>
+    
+        <div id="tab-plans" class="tab-pane">
+            <div class="pane-toolbar">
+                <h2>Recent planner outputs</h2>
+            </div>
+            <div id="plans-list"></div>
+        </div>
+
+        <div id="tab-memory" class="tab-pane">
+            <div class="pane-toolbar">
+                <h2>Stored memory</h2>
+            </div>
+            <h3 style="font-size:13px;color:var(--muted);margin:8px 0;">Long-term vector memories</h3>
+            <div id="vector-list"></div>
+            <h3 style="font-size:13px;color:var(--muted);margin:18px 0 8px 0;">Recent message log</h3>
+            <div id="messages-list"></div>
+        </div>
+
+        <div id="tab-settings" class="tab-pane">
+            <div class="pane-toolbar">
+                <h2>Paths</h2>
+            </div>
+            <div class="settings-row">
+                <span class="label">Project root</span>
+                <span class="value" id="path-project">-</span>
+            </div>
+            <div class="settings-row">
+                <span class="label">Workspace</span>
+                <span class="value" id="path-workspace">-</span>
+            </div>
+            <div class="settings-row">
+                <span class="label">Memory DB</span>
+                <span class="value" id="path-memory-db">-</span>
+            </div>
+            <div class="settings-row">
+                <span class="label">Vector DB</span>
+                <span class="value" id="path-vector-db">-</span>
+            </div>
+            <div class="settings-row">
+                <span class="label">Change workspace</span>
+                <span class="value" style="display:flex;gap:6px;">
+                    <input id="settings-workspace-input" placeholder="new workspace path" style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;" />
+                    <button id="settings-workspace-set" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px;">Set</button>
+                </span>
+            </div>
         </div>
 
         <form id="composer">
@@ -408,7 +598,14 @@
             try {
                 const res = await fetch("/api/state");
                 const data = await res.json();
-                if (data.workspace) wsInput.value = data.workspace;
+                if (data.workspace) {
+                    wsInput.value = data.workspace;
+                    document.getElementById("settings-workspace-input").value = data.workspace;
+                }
+                document.getElementById("path-project").textContent = data.project_root || "-";
+                document.getElementById("path-workspace").textContent = data.workspace || "-";
+                document.getElementById("path-memory-db").textContent = data.memory_db || "-";
+                document.getElementById("path-vector-db").textContent = data.vector_db || "-";
             } catch (err) {
                 showToast("Could not load state.", true);
             }
@@ -417,6 +614,7 @@
         async function sendText(text) {
             if (busy || !text.trim()) return;
 
+            switchTab("chat");
             addUserMessage(text);
             setBusy(true);
             showTyping();
@@ -478,6 +676,200 @@
             }
         }
 
+        async function changeWorkspace(path) {
+            if (!path) return;
+
+            try {
+                const res = await fetch("/api/workspace", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ path }),
+                });
+                const data = await res.json();
+
+                if (!data.ok) {
+                    showToast(data.error || "Could not change workspace.", true);
+                    return;
+                }
+
+                wsInput.value = data.workspace;
+                document.getElementById("settings-workspace-input").value = data.workspace;
+                document.getElementById("path-workspace").textContent = data.workspace;
+                addSystemMessage(`Workspace changed to ${data.workspace}`);
+                showToast("Workspace updated.");
+            } catch (err) {
+                showToast("Network error.", true);
+            }
+        }
+
+        function renderPlans(plans) {
+            const list = document.getElementById("plans-list");
+            list.innerHTML = "";
+
+            if (!plans || !plans.length) {
+                list.innerHTML = '<div class="empty">No planner outputs yet. Send a task in the Chat tab.</div>';
+                return;
+            }
+
+            for (const plan of plans) {
+                const card = document.createElement("div");
+                card.className = "card";
+
+                const meta = document.createElement("div");
+                meta.className = "card-meta";
+                const badge = `<span class="badge ${plan.status}">${escapeHtml(plan.status || "")}</span>`;
+                meta.innerHTML = `${escapeHtml(plan.timestamp || "")} ${badge}`;
+                card.appendChild(meta);
+
+                if (plan.goal) {
+                    const title = document.createElement("div");
+                    title.className = "card-title";
+                    title.textContent = "Goal: " + plan.goal;
+                    card.appendChild(title);
+                }
+
+                if (plan.rationale) {
+                    const r = document.createElement("div");
+                    r.style.color = "var(--muted)";
+                    r.style.fontSize = "12px";
+                    r.style.marginBottom = "6px";
+                    r.textContent = plan.rationale;
+                    card.appendChild(r);
+                }
+
+                if (plan.error) {
+                    const err = document.createElement("div");
+                    err.style.color = "var(--error)";
+                    err.textContent = "Error: " + plan.error;
+                    card.appendChild(err);
+                }
+
+                if (Array.isArray(plan.steps) && plan.steps.length) {
+                    const pre = document.createElement("pre");
+                    pre.textContent = JSON.stringify(plan.steps, null, 2);
+                    card.appendChild(pre);
+                }
+
+                list.appendChild(card);
+            }
+        }
+
+        function renderMemory(data) {
+            const vectorList = document.getElementById("vector-list");
+            const messagesList = document.getElementById("messages-list");
+            vectorList.innerHTML = "";
+            messagesList.innerHTML = "";
+
+            const vectors = data.vector_memories || [];
+            if (!vectors.length) {
+                vectorList.innerHTML = '<div class="empty">No long-term memories stored.</div>';
+            } else {
+                for (const item of vectors) {
+                    const card = document.createElement("div");
+                    card.className = "card";
+
+                    const meta = document.createElement("div");
+                    meta.className = "card-meta";
+                    const m = item.metadata || {};
+                    const badges = [
+                        m.memory_type ? `<span class="badge">${escapeHtml(m.memory_type)}</span>` : "",
+                        m.topic ? `<span class="badge">${escapeHtml(m.topic)}</span>` : "",
+                    ].join(" ");
+                    meta.innerHTML = `${escapeHtml(m.timestamp || "")} ${badges}`;
+                    card.appendChild(meta);
+
+                    const body = document.createElement("div");
+                    body.textContent = item.content || "";
+                    card.appendChild(body);
+
+                    if (m.confidence != null) {
+                        const c = document.createElement("div");
+                        c.style.color = "var(--muted)";
+                        c.style.fontSize = "11px";
+                        c.style.marginTop = "4px";
+                        c.textContent = `confidence: ${m.confidence}`;
+                        card.appendChild(c);
+                    }
+
+                    vectorList.appendChild(card);
+                }
+            }
+
+            const messages = data.recent_messages || [];
+            if (!messages.length) {
+                messagesList.innerHTML = '<div class="empty">No messages logged yet.</div>';
+                return;
+            }
+
+            for (const msg of messages) {
+                const card = document.createElement("div");
+                card.className = "card";
+
+                const meta = document.createElement("div");
+                meta.className = "card-meta";
+                const badge = `<span class="badge ${msg.status}">${escapeHtml(msg.status || "")}</span>`;
+                meta.innerHTML = `${escapeHtml(msg.timestamp || "")} - ${escapeHtml(msg.sender || "")} &rarr; ${escapeHtml(msg.receiver || "")} ${badge}`;
+                card.appendChild(meta);
+
+                const title = document.createElement("div");
+                title.className = "card-title";
+                title.textContent = msg.message_type || "";
+                card.appendChild(title);
+
+                const pre = document.createElement("pre");
+                pre.textContent = JSON.stringify(msg.response, null, 2);
+                card.appendChild(pre);
+
+                messagesList.appendChild(card);
+            }
+        }
+
+        async function refreshPlans() {
+            try {
+                const res = await fetch("/api/plans");
+                const data = await res.json();
+                renderPlans(data.plans || []);
+            } catch (err) {
+                showToast("Could not load plans.", true);
+            }
+        }
+
+        async function refreshMemory() {
+            try {
+                const res = await fetch("/api/memory");
+                const data = await res.json();
+                renderMemory(data);
+            } catch (err) {
+                showToast("Could not load memory.", true);
+            }
+        }
+
+        function switchTab(name) {
+            for (const btn of document.querySelectorAll(".tabs button")) {
+                btn.classList.toggle("active", btn.dataset.tab === name);
+            }
+            for (const pane of document.querySelectorAll(".tab-pane")) {
+                pane.classList.toggle("active", pane.id === `tab-${name}`);
+            }
+
+            if (name === "plans") refreshPlans();
+            if (name === "memory") refreshMemory();
+            if (name === "settings") loadState();
+        }
+
+        for (const btn of document.querySelectorAll(".tabs button")) {
+            btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+        }
+
+        document.getElementById("plans-refresh").addEventListener("click", refreshPlans);
+        document.getElementById("memory-refresh").addEventListener("click", refreshMemory);
+        document.getElementById("settings-refresh").addEventListener("click", loadState);
+
+        document.getElementById("settings-workspace-set").addEventListener("click", () => {
+            const path = document.getElementById("settings-workspace-input").value.trim();
+            changeWorkspace(path);
+        });
+
         composer.addEventListener("submit", (e) => {
             e.preventDefault();
             const text = input.value;
@@ -498,29 +890,9 @@
             input.style.height = Math.min(input.scrollHeight, 140) + "px";
         });
 
-        wsBtn.addEventListener("click", async () => {
+        wsBtn.addEventListener("click", () => {
             const path = wsInput.value.trim();
-            if (!path) return;
-
-            try {
-                const res = await fetch("/api/workspace", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ path }),
-                });
-                const data = await res.json();
-
-                if (!data.ok) {
-                    showToast(data.error || "Could not change workspace.", true);
-                    return;
-                }
-
-                wsInput.value = data.workspace;
-                addSystemMessage(`Workspace changed to ${data.workspace}`);
-                showToast("Workspace updated.");
-            } catch (err) {
-                showToast("Network error.", true);
-            }
+            changeWorkspace(path);
         });
 
         loadState();

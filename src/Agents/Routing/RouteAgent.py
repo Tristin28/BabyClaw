@@ -2,7 +2,6 @@ from src.Agents.BaseAgent import Agent
 from src.OllamaClient import OllamaClient
 from src.message import Message
 
-
 class RouteAgent(Agent):
     SCHEMA = {
         "type": "object",

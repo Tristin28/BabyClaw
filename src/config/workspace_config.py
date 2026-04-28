@@ -1,18 +1,24 @@
 import json
 from pathlib import Path
 
-CONFIG_PATH = Path("config/workspace_config.json")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_PATH = PROJECT_ROOT / "config" / "workspace_config.json"
+DEFAULT_WORKSPACE = PROJECT_ROOT / "workspace"
+
 
 def load_workspace_path() -> str:
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "r") as f:
             data = json.load(f)
-            return data.get("workspace_root", "./workspace")
+            stored = data.get("workspace_root")
+            if stored:
+                return stored
 
-    return "./workspace"
+    return str(DEFAULT_WORKSPACE)
 
-def save_workspace_path(path: str):
-    CONFIG_PATH.parent.mkdir(exist_ok=True)
+
+def save_workspace_path(path) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     with open(CONFIG_PATH, "w") as f:
-        json.dump({"workspace_root": path}, f, indent=2)
+        json.dump({"workspace_root": str(path)}, f, indent=2)

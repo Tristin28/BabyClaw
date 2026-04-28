@@ -294,7 +294,7 @@ def test_reject_then_rollback_then_replan_then_succeed(tmp_path):
 
 def test_planner_path_traversal_fails_before_permission_or_execution(tmp_path):
     """
-    Unsafe paths should fail during plan compilation before permission or execution.
+        Unsafe paths should fail during plan compilation before permission or execution.
     """
     from src.Agents.Planning.PlannerAgent import PlannerAgent
 
@@ -356,7 +356,7 @@ def test_replan_preserves_user_task_verbatim(tmp_path):
 
     assert replan_input["task"] == original_task
 
-    # Use lower() so this test does not fail just because of capital letters.
+    # Using lower() so this test does not fail just because of capital letters.
     assert "previous attempt was rejected" in replan_input["context"].lower()
 
     # Reviewer feedback should be present in context.

@@ -7,10 +7,11 @@ from src.OllamaClient import OllamaClient
 from datetime import datetime, timezone
 
 class MemoryAgent(Agent):
-    #Squared L2 distance ceiling used when filtering vector-store hits.
-    #Chroma's default embedding (all-MiniLM-L6-v2) returns squared L2 distance,
-    #so a value of approximate 1.2 corresponds to roughly cosine similarity 0.4 which still
-    #captures paraphrased matches like "what is my name?" vs a stored fact.
+    '''
+        Vector hits with squared L2 distance below this threshold count as relevant.
+        Chroma's default embedding returns squared L2; 1.2 maps to roughly cosine 0.4,
+        which still catches paraphrases like "what is my name?" matching a stored fact.
+    '''
     RELEVANCE_THRESHOLD = 1.2
 
     SCHEMA = {
@@ -76,7 +77,7 @@ class MemoryAgent(Agent):
         sections = []
 
         for memory_type in ("user_fact", "user_preference"):
-            results = self.vector_repo.get_facts_by_type(memory_type=memory_type, max_items=20)
+            results = self.vector_repo.get_all_memories()
             docs = results.get("documents") or []
             metas = results.get("metadatas") or []
 
@@ -272,48 +273,17 @@ class MemoryAgent(Agent):
                                 """        
                 }
         ]
+
     
-    def is_grounded_in_user_task(self, memory: dict, user_task: str) -> bool:
-        """
-        Checks that the memory content is meaningfully grounded in what the user literally said.
-        This prevents storing names/facts invented by the LLM.
-        """
+    def validate_llm_response(self, response: dict) -> list[dict]:
+        '''
+            Drops malformed entries from the LLM's response. Keeps only entries with valid type / topic / content / confidence fields.
+        '''
 
-        content = memory.get("content", "").lower()
-        task = user_task.lower()
-
-        # Remove very common words that do not prove grounding.
-        stop_words = {
-            "the", "a", "an", "is", "are", "am", "i", "me", "my", "you",
-            "user", "users", "to", "of", "and", "or", "in", "on", "for",
-            "that", "this", "it", "with", "as", "be", "was"
-        }
-
-        task_words = {
-            word.strip(".,!?;:'\"()[]{}").lower()
-            for word in task.split()
-            if len(word.strip(".,!?;:'\"()[]{}")) > 2
-        }
-
-        content_words = {
-            word.strip(".,!?;:'\"()[]{}").lower()
-            for word in content.split()
-            if len(word.strip(".,!?;:'\"()[]{}")) > 2
-        }
-
-        task_words = task_words - stop_words
-        content_words = content_words - stop_words
-
-        overlap = task_words.intersection(content_words)
-
-        return len(overlap) >= 1
-    
-    def validate_llm_response(self, response: dict, user_task: str):
         if not response.get("should_store"):
             return []
 
         valid_memories = []
-
         ALLOWED_MEMORY_TYPES = {"user_fact", "user_preference"}
 
         for memory in response.get("memories", []):
@@ -324,16 +294,12 @@ class MemoryAgent(Agent):
 
             if memory_type not in ALLOWED_MEMORY_TYPES:
                 continue
-
             if not isinstance(topic, str) or topic.strip() == "":
                 continue
-
             if not isinstance(content, str) or content.strip() == "":
                 continue
-
             if not isinstance(confidence, (int, float)):
                 continue
-
             if not (0.0 <= confidence <= 1.0):
                 continue
 
@@ -347,55 +313,57 @@ class MemoryAgent(Agent):
         return valid_memories
 
 
-    def store_long_term_memory(self, user_task: str, episode_summary: str, conversation_id: int, step_index:int) -> Message:
+    def store_long_term_memory(self, user_task: str, conversation_id: int, step_index: int) -> Message:
         '''
-            Using an llm in order to determine what type of memory will be stored inside the vector db and how it will be stored
-            That is how the chunks are split so that specific chunks are embeded together in order to have it have meaning and not be pointless
+            Asks the LLM what (if anything) from user_task should become long-term memory,
+            validates the response, drops rejected/duplicate entries, and writes the rest to the vector store.
         '''
+
         messages = self.build_messages(user_task=user_task)
-        
+
         try:
             memory_result = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
 
             if not memory_result["should_store"]:
-                response={"stored": False}
-                return Message(conversation_id=conversation_id, step_index=step_index, sender="memory", receiver="coordinator", target_agent=None, 
-                       message_type="memory_store", status="completed", response=response, visibility="internal")
-            
-            
-            valid_memories = self.validate_llm_response(response=memory_result, user_task=user_task)
+                response = {"stored": False}
+                return Message(conversation_id=conversation_id, step_index=step_index, sender="memory",
+                               receiver="coordinator", target_agent=None, message_type="memory_store",
+                               status="completed", response=response, visibility="internal")
+
+            valid_memories = self.validate_llm_response(response=memory_result)
+
             if valid_memories:
                 for memory in valid_memories:
-
                     if self.should_reject_memory(memory):
                         continue
 
+                    # Skip if a near-identical entry is already stored.
                     existing = self.get_relevant_memory(task=memory["content"], k=3)
                     if memory["content"].lower() in existing.lower():
-                        #filtering out any infromation which already existss in the database
                         continue
 
-                    metadata = self.build_metadata(conversation_id=conversation_id, memory_type=memory["memory_type"], topic = memory["topic"], 
-                                                    source="reviewer_accepted", confidence=memory["confidence"],timestamp=datetime.now(timezone.utc).isoformat())
+                    metadata = self.build_metadata(conversation_id=conversation_id,
+                                                   memory_type=memory["memory_type"],
+                                                   topic=memory["topic"],
+                                                   source="reviewer_accepted",
+                                                   confidence=memory["confidence"],
+                                                   timestamp=datetime.now(timezone.utc).isoformat())
 
                     self.vector_repo.store_memory(text=memory["content"], metadata=metadata)
 
-                response={"stored": True}
+                response = {"stored": True}
                 status = "completed"
             else:
-                response={"stored": False}
+                response = {"stored": False}
                 status = "completed"
 
         except Exception as e:
-            status="failed"
-            response={
-                "stored": False,
-                "error": str(e)
-            }
+            status = "failed"
+            response = {"stored": False, "error": str(e)}
 
-        #Only returning message to indicate whether storing relative content succeeded or not
-        return Message(conversation_id=conversation_id, step_index=step_index, sender="memory", receiver="coordinator", target_agent=None, 
-                       message_type="memory_store", status=status, response=response, visibility="internal")
+        return Message(conversation_id=conversation_id, step_index=step_index, sender="memory",
+                       receiver="coordinator", target_agent=None, message_type="memory_store",
+                       status=status, response=response, visibility="internal")
     
     def should_reject_memory(self, memory: dict) -> bool:
         '''

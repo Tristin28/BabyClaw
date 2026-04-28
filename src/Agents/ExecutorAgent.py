@@ -1,7 +1,6 @@
 from src.Agents.BaseAgent import Agent
 from src.message import Message 
 from typing import Any
-#from concurrent.futures import ThreadPoolExecutor, as_completed - removed parallel work
 
 class ExecutorAgent(Agent):
     def __init__(self, tool_registry: dict):
@@ -32,19 +31,14 @@ class ExecutorAgent(Agent):
     def is_execution_complete(self, execution_state: dict) -> bool:
         return len(execution_state["remaining_steps"]) == 0
     
-    def get_runnable_wave(self, execution_state: dict) -> list[dict]:
+    def get_runnable_steps(self, execution_state: dict) -> list[dict]:
+        '''
+            Returns the steps from remaining_steps whose dependencies are all completed.
+        '''
         remaining_steps = execution_state["remaining_steps"]
         step_status = execution_state["step_status"]
-        return self.get_runnable_steps(remaining_steps, step_status) #will retutrn the respective sublist containing only dict items of which steps are valid to be executed
-    
-    def get_runnable_steps(self, remaining_steps, step_status) -> list[dict]:
-        runnable = []
 
-        for step in remaining_steps:
-            if self.dependencies_satisfied(step, step_status):
-                runnable.append(step)
-
-        return runnable #would represent a sublist of the actual list i.e. current step items to be executed
+        return [step for step in remaining_steps if self.dependencies_satisfied(step, step_status)]
 
     def dependencies_satisfied(self, step: dict, step_status: dict) -> bool:
         for dep_id in step.get("depends_on",[]):
@@ -239,7 +233,7 @@ class ExecutorAgent(Agent):
             input_map=input_map
         )
 
-    def run_set_tools(self, conversation_id: int, step_index: int, execution_state: dict, runnable_steps: list[dict]) -> Message:
+    def run_steps(self, conversation_id: int, step_index: int, execution_state: dict, runnable_steps: list[dict]) -> Message:
         '''
             Wrapper function for execute_tools so that it calls it and then the respective execution state it returns is then checked whether 
             it is entirely complete, not yet complete or something failed

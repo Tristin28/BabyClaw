@@ -55,10 +55,11 @@ class PlannerAgent(Agent):
         if missing_keys:
             raise ValueError(f"Missing planner_input keys: {missing_keys}")
         
-        """
-        Builds a dynamic JSON schema based on the available planner tools, this is done so that hallucinated tool names and invalid arguments are prevented
-        """
+        
     def build_schema(self, tools: list[dict]) -> dict:
+        """
+            Builds a dynamic JSON schema based on the available planner tools, this is done so that hallucinated tool names and invalid arguments are prevented
+        """
         tool_names = [tool["name"] for tool in tools]
 
         return {

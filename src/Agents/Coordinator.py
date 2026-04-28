@@ -67,8 +67,7 @@ class Coordinator():
         self.router = router
         self.llm_client = llm_client
 
-    def build_planner_input(self, user_task: str, route: dict, conversation_id: int, step_index: int,
-                            replan_feedback: str = "") -> dict:
+    def build_planner_input(self, user_task: str, route: dict, conversation_id: int, step_index: int, replan_feedback: str = "") -> dict:
         scoped_context = self.build_scoped_context(user_task, route)
         if replan_feedback:
             scoped_context = f"{scoped_context}\n\n{replan_feedback}" if scoped_context else replan_feedback
@@ -141,55 +140,7 @@ class Coordinator():
                     """
             return planner_msg  #failed after retries
 
-    def build_replan_context(self, original_context: str, previous_plan: dict, executor_response: dict, reviewer_response: dict) -> str:
-        '''
-            Builds a small amount of context for replanning.
-
-            The goal is not to dump everything into the Planner.
-            The goal is only to tell the Planner:
-                - what the previous goal was,
-                - what tools were used,
-                - what final result was produced,
-                - why the reviewer rejected it.
-        '''
-        execution_trace = executor_response.get("execution_trace", [])
-
-        simplified_trace = []
-
-        for step in execution_trace:
-            simplified_trace.append({
-                "id": step.get("id"),
-                "tool": step.get("tool"),
-                "args": step.get("args"),
-                "status": step.get("status"),
-                "result": step.get("result")
-            })
-
-        reviewer_issues = reviewer_response.get("issues", [])
-
-        return f"""
-                {original_context}
-
-                REPLAN CONTEXT:
-                The previous attempt was rejected.
-
-                Previous planner goal:
-                {previous_plan.get("goal", "N/A")}
-
-                Previous executed steps:
-                {json.dumps(simplified_trace, indent=2)}
-
-                Reviewer issues:
-                {json.dumps(reviewer_issues, indent=2)}
-
-                Replanning instruction:
-                Create a revised plan for the original current user task only.
-                Do not treat the previous plan as the task.
-                Do not treat the previous execution as the task.
-                Do not copy unrelated file names, paths, tools, or content from the failed attempt.
-                Only use this replan context to avoid repeating the same mistake.
-                """
-
+    
 
     def replan_after_review_rejection(self, conversation_id: int, user_task: str, plan_response: dict,
                                       executor_response: dict, reviewer_response: dict, approved_actions: set) -> Message:
@@ -210,8 +161,7 @@ class Coordinator():
         route = plan_response.get("route") or self.run_router(conversation_id=conversation_id, user_task=user_task)
         route = self.validate_route(route)
 
-        planner_input = self.build_planner_input(user_task=user_task, route=route,
-                                                 conversation_id=conversation_id, step_index=self.PLANNER_STEP,
+        planner_input = self.build_planner_input(user_task=user_task, route=route, conversation_id=conversation_id, step_index=self.PLANNER_STEP,
                                                  replan_feedback=replan_feedback)
 
         planner_msg = self.try_plan(planner_input=planner_input)
@@ -421,10 +371,7 @@ class Coordinator():
                                             review_summary=reviewer_response.get("review_summary", "Reviewer rejected execution."),
                                             issues=issues,execution_response=executor_response, rollback_results=rollback_results, details=reviewer_response)
 
-        episode_summary = self.create_epsiodic_summary(user_task=user_task, planner_response=plan_response,
-                                                       executor_response=executor_response, reviewer_response= reviewer_response)
-
-        memory_msg = self.memory.store_long_term_memory(user_task=user_task,episode_summary=episode_summary,conversation_id=conversation_id, step_index=self.MEMORY_STEP)
+        memory_msg = self.memory.store_long_term_memory(user_task=user_task, conversation_id=conversation_id, step_index=self.MEMORY_STEP)
         self.memory.store_message(message=memory_msg)
 
         return self.build_success_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
@@ -443,7 +390,7 @@ class Coordinator():
                                response={"message": "Planner produced no executable steps."}, visibility="external")
         
         while not self.executor.is_execution_complete(execution_state):
-            runnable_steps = self.executor.get_runnable_wave(execution_state)
+            runnable_steps = self.executor.get_runnable_steps(execution_state)
 
             if not runnable_steps:
                 #since while loop is confirming that the execution is not yet completete then runnable_steps has to be with some respective steps, hence if it is empty -> failure
@@ -467,7 +414,7 @@ class Coordinator():
                 return self.build_permission_request_message(conversation_id=conversation_id, step_index=start_step_index, user_task=user_task, plan_response=plan_response, 
                                                              permission_steps=permission_steps,execution_state=execution_state, pending_runnable_steps=runnable_steps)
 
-            executor_msg = self.executor.run_set_tools(conversation_id=conversation_id, step_index=start_step_index,execution_state=execution_state,runnable_steps=runnable_steps)
+            executor_msg = self.executor.run_steps(conversation_id=conversation_id, step_index=start_step_index,execution_state=execution_state,runnable_steps=runnable_steps)
             self.memory.store_message(executor_msg)
 
             if executor_msg.status == "failed":
@@ -502,14 +449,9 @@ class Coordinator():
             if not self.tool_registry.get(step["tool"], {}).get("requires_permission", False):
                 continue
 
-            resolved_args = self.executor.resolve_step_args_for_permission(
-                step=step,
-                execution_state=execution_state
-            )
+            resolved_args = self.executor.resolve_step_args_for_permission(step=step, execution_state=execution_state)
 
-            approved_action_signatures.append(
-                self.permission_signature(step, resolved_args)
-            )
+            approved_action_signatures.append(self.permission_signature(step, resolved_args))
 
         execution_state["approved_step_ids"].update(step["id"] for step in pending_runnable_steps 
                                                     if self.tool_registry.get(step["tool"], {}).get("requires_permission", False)
@@ -518,7 +460,7 @@ class Coordinator():
         execution_state.setdefault("approved_actions", set()).update(approved_action_signatures)
 
         #executing the exact runnable wave which was already shown to the user and approved
-        executor_msg = self.executor.run_set_tools(conversation_id=conversation_id, step_index=step_index, execution_state=execution_state, 
+        executor_msg = self.executor.run_steps(conversation_id=conversation_id, step_index=step_index, execution_state=execution_state, 
                                                    runnable_steps=pending_runnable_steps)
         self.memory.store_message(message=executor_msg)
 
@@ -655,55 +597,6 @@ class Coordinator():
 
         return message
     
-
-    '''
-        Episodic summary method - needs checking
-    '''
-    def create_epsiodic_summary(self, user_task: str, planner_response: dict, executor_response: dict, reviewer_response: dict) -> str:
-        """
-            Uses the LLM to produce a concise, factual episode summary from the completed workflow. This summary is what the MemoryAgent uses to decide 
-            whether something is useful to be considered as long-term semantic memory, and if no outcome is retrieved from llm a fallback summary is coded.
-        """
-        cleaned_executor_response = self.reviewer.build_review_evidence(executor_response) #using the same funcitonality because it is important here too
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Given a completed workflow, produce a short factual summary "
-                    "describing: what the user asked for, what the plan's goal was, "
-                    "what tools were executed and what they produced, and what the "
-                    "reviewer concluded. "
-                    "Also identify whether the user revealed any stable personal fact, "
-                    "preference, project detail, tool preference, learning goal, or reusable task lesson. "
-                    "If the user revealed a stable fact or preference, state it clearly in the summary. "
-                    "Do not invent facts. "
-                    "Be concise (2-4 sentences). Do not add opinions or speculation. "
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"User task:\n{user_task}\n\n"
-                    f"Planner goal:\n{planner_response.get('goal', 'N/A')}\n\n"
-                    f"Execution trace:\n{cleaned_executor_response}\n\n"
-                    f"Reviewer summary:\n{reviewer_response.get('review_summary', 'N/A')}"
-                ),
-            },
-        ]
- 
-        try:
-            summary = self.llm_client.invoke_text(messages=messages, stream=False).strip()
-            if summary: #if condition to make sure it did not return ""
-                return summary 
-        except Exception:
-            pass  #letting the error slide, as if llm connection does not happen then the pre-coded summary would be sent instead
-
-        goal = planner_response.get("goal", user_task)
-        review = reviewer_response.get("review_summary", "completed successfully")
-        return f"Goal: {goal}. Outcome: {review}."
-    
-    
     def rollback_execution(self, executor_response: dict) -> list[dict]:
         rollback_results = []
 
@@ -733,75 +626,6 @@ class Coordinator():
                 })
 
         return rollback_results
-    
-    
-    def extract_user_filename(self, user_task: str) -> str | None:
-        '''
-            Pulls the literal filename out of the user task. Handles:
-              - "create me a file called Bye"        -> "Bye"
-              - "called work.txt"                    -> "work.txt"
-              - "named report.md"                    -> "report.md"
-              - "in text mode" / "as txt"            -> appends .txt to bare name
-            Returns None when no filename can be confidently extracted.
-        '''
-        import re
-
-        text = user_task.strip()
-
-        match = re.search(
-            r"\b(?:called|named)\s+([A-Za-z0-9_\-/.]+)",
-            text,
-            flags=re.IGNORECASE,
-        )
-
-        if not match:
-            #Bare "filename.ext" anywhere in the task.
-            match = re.search(r"\b([A-Za-z0-9_\-/]+\.[A-Za-z0-9]{1,6})\b", text)
-
-        if not match:
-            return None
-
-        candidate = match.group(1).strip(".,'\"")
-
-        #If candidate has no extension, look for a "mode" phrase to attach one.
-        if "." not in candidate:
-            lower_text = text.lower()
-            for phrase, ext in self.MODE_EXTENSIONS.items():
-                if phrase in lower_text:
-                    candidate = f"{candidate}.{ext}"
-                    break
-
-        return candidate
-
-    def pin_user_filenames(self, plan_response: dict, user_task: str) -> dict:
-        '''
-            Deterministically overwrites planner-provided paths with the literal
-            filename extracted from the user task. Stops the planner from
-            substituting names like "file_to_create" or "empty_file.txt".
-        '''
-        pinned_name = self.extract_user_filename(user_task)
-        if not pinned_name:
-            return plan_response
-
-        for step in plan_response.get("steps", []):
-            if step.get("tool") not in self.PATH_PINNED_TOOLS:
-                continue
-
-            args = step.get("args", {})
-            current = args.get("path", "")
-
-            #Strip markdown-link syntax the planner sometimes wraps filenames in.
-            if isinstance(current, str):
-                import re
-                md = re.match(r"^\s*\[([^\]]+)\]\([^)]*\)\s*$", current)
-                if md:
-                    current = md.group(1)
-
-            if current != pinned_name:
-                args["path"] = pinned_name
-                step["args"] = args
-
-        return plan_response
     
     def validate_route(self, route: dict) -> dict:
         '''

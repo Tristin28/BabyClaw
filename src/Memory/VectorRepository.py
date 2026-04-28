@@ -11,8 +11,9 @@ from pathlib import Path
 import uuid 
 
 class VectorRepository():
-    CHROMA_PATH = Path(__file__).resolve().parents[2] / "chroma_db"
+    CHROMA_PATH = Path(__file__).resolve().parents[2] / "Memory" / "chroma_db"
     def __init__(self):
+        self.CHROMA_PATH.mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=self.CHROMA_PATH) #Since only one vector db will be used composition style is used
         self.collection = self.client.get_or_create_collection(name="memory") 
 
@@ -28,11 +29,8 @@ class VectorRepository():
     def retrieve_relevant_memory(self, task: str, k: int) -> dict:
         return self.collection.query(query_texts=[task], n_results=k)
 
-    def get_facts_by_type(self, memory_type: str, max_items: int = 20) -> dict:
+    def get_all_memories(self) -> dict:
         '''
-            Filter-based fetch (not similarity-based). Used to always pull stable
-            user_facts/preferences regardless of how the current task is phrased,
-            because semantic search misses them when the query is unrelated text
-            like "summarise hello.txt and email it".
+            Debug/helper method used to visually confirm that memories are actually being stored inside the vector database.
         '''
-        return self.collection.get(where={"memory_type": memory_type}, limit=max_items)
+        return self.collection.get()
