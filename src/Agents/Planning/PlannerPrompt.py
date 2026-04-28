@@ -248,6 +248,30 @@ The Coordinator displays tool results.
 Do not add extra file/folder mutations that the user did not request.
 
 ==================================================
+WORKSPACE MUTATION COMPLETION RULE
+
+For workspace_mutation tasks, generate_content alone is never enough.
+
+If the user asks to create, save, write, put, build, or place something in the workspace, the plan must include at least one actual workspace mutation tool such as:
+- create_dir
+- create_file
+- write_file
+- append_file
+- replace_text
+- delete_file
+- delete_dir
+- move_path
+- copy_path
+
+Use generate_content only to produce content that will later be passed into create_file or write_file using content_step.
+
+Wrong:
+generate_content only
+
+Correct:
+generate_content
+create_file or write_file using content_step
+==================================================
 OUTPUT FORMAT
 
 Return only valid JSON.
@@ -269,4 +293,24 @@ The JSON must have this shape:
 Do not include markdown.
 Do not include text outside JSON.
 Do not include depends_on.
+
+==================================================
+If the user asks to create a folder/file but does not provide an exact name, you may infer a short descriptive name from the current task.
+
+The inferred name must be grounded in the user's request.
+
+Good:
+- user asks for a chess pipeline → chess_pipeline
+- user asks for a todo app → todo_app
+- user asks for sorting notes → sorting_notes
+
+Bad:
+- project_name
+- new_folder
+- folder
+- file
+- output
+- sample
+- example
+- placeholder
 """

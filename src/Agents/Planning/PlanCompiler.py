@@ -13,7 +13,7 @@ class PlanCompiler:
         "args": dict,
     }
 
-    def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None):
+    def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None, route: dict = None):
         """
         available_tools should be the same planner-facing tool descriptions
         given to the PlannerAgent.
@@ -24,6 +24,7 @@ class PlanCompiler:
         """
         self.available_tools = available_tools
         self.workspace_config = workspace_config
+        self.route = route
 
         self.tool_names = {
             tool["name"]
@@ -204,6 +205,7 @@ class PlanCompiler:
                     
     def compile(self, raw_plan: dict) -> dict:
         self.validate_top_level_schema(raw_plan)
+        self.validate_workspace_mutation_has_real_mutation(raw_plan=raw_plan, route=self.route)
 
         normalised_steps = self.normalise_step_ids(raw_plan["steps"])
         normalised_steps = self.remap_step_arguments(normalised_steps)
@@ -426,6 +428,38 @@ class PlanCompiler:
                         f"Step {step_id} tool '{tool_name}' is missing required argument "
                         f"'{arg_name}'. Expected either '{arg_name}' or '{arg_name}_step'."
                     )
+                
+    def validate_workspace_mutation_has_real_mutation(self, raw_plan: dict, route: dict = None) -> None:
+        if not route:
+            return
+
+        if route.get("task_type") != "workspace_mutation":
+            return
+
+        real_mutation_tools = {
+            "create_file",
+            "write_file",
+            "append_file",
+            "delete_file",
+            "replace_text",
+            "create_dir",
+            "delete_dir",
+            "move_path",
+            "copy_path"
+        }
+
+        steps = raw_plan.get("steps", [])
+
+        has_real_mutation = any(
+            step.get("tool") in real_mutation_tools
+            for step in steps
+        )
+
+        if not has_real_mutation:
+            raise ValueError(
+                "Workspace mutation task must include at least one real workspace mutation tool. "
+                "generate_content alone does not complete a workspace task."
+            )
                 
     def validate_direct_arg(self,step_id: int, tool_name: str, arg_name: str, arg_value, args_schema: dict):
         if arg_name not in args_schema:

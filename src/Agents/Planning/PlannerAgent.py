@@ -113,7 +113,7 @@ class PlannerAgent(Agent):
             schema = self.build_schema(planner_input["tools"])
             raw_response = self.llm_client.invoke_json(messages,stream=False,schema=schema)
 
-            compiler = PlanCompiler(available_tools=planner_input["tools"], workspace_config=self.workspace_config)
+            compiler = PlanCompiler(available_tools=planner_input["tools"], workspace_config=self.workspace_config, route=planner_input.get("route", {}))
             response = compiler.compile(raw_response)
 
             status = 'completed'

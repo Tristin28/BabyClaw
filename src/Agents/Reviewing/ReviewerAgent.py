@@ -110,12 +110,10 @@ class ReviewerAgent(Agent):
             Builds the small clean object that the reviewer LLM is allowed to see.
             This hides architecture-only data such as rollback logs, approved actions,
             permission state, and internal execution state.
-            Now also includes workspace listings before/after so the reviewer can
-            verify negative claims like "deleted all files except X".
 
-            It also includes the route scope so the reviewer can check that the
-            executor did not use tools which were outside of what the coordinator
-            allowed for this current task.
+            It includes workspace_before, workspace_after, and workspace_diff so the
+            reviewer can check whether the final workspace state actually matches
+            what the user asked for.
         """
         clean_steps = []
 
@@ -145,8 +143,31 @@ class ReviewerAgent(Agent):
             "steps": clean_steps,
             "workspace_before": workspace_before or [],
             "workspace_after": workspace_after or [],
+            "workspace_diff": self.build_workspace_diff(
+                workspace_before=workspace_before,
+                workspace_after=workspace_after
+            )
         }
+    
+    def build_workspace_diff(self, workspace_before: list = None, workspace_after: list = None) -> dict:
+        """
+            Builds a simple before/after difference of the workspace.
+            This helps the reviewer check what actually changed, instead of only
+            trusting the execution trace.
+        """
+        before_set = set(workspace_before or [])
+        after_set = set(workspace_after or [])
 
+        created_paths = sorted(after_set - before_set)
+        deleted_paths = sorted(before_set - after_set)
+        unchanged_paths = sorted(before_set & after_set)
+
+        return {
+            "created_paths": created_paths,
+            "deleted_paths": deleted_paths,
+            "unchanged_paths": unchanged_paths
+        }
+    
     def build_messages(self, user_task: str, review_evidence: dict) -> list[dict]:
         return [
             {
@@ -163,25 +184,93 @@ class ReviewerAgent(Agent):
                             Only judge whether the clean execution evidence satisfies the CURRENT USER TASK above.
                             Do not judge old user messages, memory, rollback data, permission data, or unrelated prior tasks.
 
-                            Use the actual executed steps, resolved_args, and results to decide whether the task was completed.
-                            Do not accept just because the goal sounds correct. The actual tool execution must match the current task.
+                            Use this priority order:
 
-                            Use 'workspace_before' and 'workspace_after' to verify negative or set-based claims
-                            such as "delete all files except X" or "remove every .txt file". If workspace_after
-                            matches what the task requested, ACCEPT, regardless of how many delete steps were used.
+                            1. CURRENT USER TASK
+                            This is the source of truth.
 
-                            Use 'route_scope' to verify that execution stayed inside the coordinator-approved scope.
-                            If route_scope.allow_mutations is false, then mutation tools should not have been used.
-                            If route_scope.allowed_tools is not empty, every executed tool must be inside allowed_tools.
+                            2. WORKSPACE DIFF
+                            Check what paths were actually created, deleted, or left unchanged.
+
+                            3. EXECUTED STEPS
+                            Check the actual tools, resolved_args, results, and errors.
+
+                            4. ROUTE SCOPE
+                            Check whether the execution stayed inside the coordinator-approved route.
+
+                            For workspace mutation tasks:
+                            - Accept only if the final workspace state matches what the user asked for.
+                            - Reject if the task asked to create a folder but no folder was created.
+                            - Reject if the task asked to create files but no files were created.
+                            - Reject if the created names are generic placeholders and not grounded in the task.
+                            - Reject if file content is empty when the user asked for meaningful content.
+                            - Reject if file content is unrelated to the requested topic.
+                            - Reject if only generate_content ran but nothing was saved into the workspace.
+                            - Reject if extra files/folders were created that the user did not ask for.
+                            - Reject if requested files/folders are missing from workspace_after.
+                            - Reject if the workspace changed even though the task was read-only.
+
+                            For file content:
+                            - If the task says a file should contain specific content, the content must appear in resolved_args.content or the final file state.
+                            - If the task asks for a topic-specific file, the content must be about that topic.
+                            - Do not accept generic content like "Hello world", "Project Name", "sample text", or placeholder text unless the user asked for it.
+
+                            For route scope:
+                            - If route_scope.allow_mutations is false, mutation tools should not have been used.
+                            - If route_scope.allowed_tools is not empty, every executed tool must be inside allowed_tools.
 
                             Mutation tools are listed in 'mutation_tools'.
+
+                            If accepted is true, issues must be [].
+                            If accepted is false, issues must clearly explain what was missing, wrong, extra, or out of scope.
 
                             CLEAN EXECUTION EVIDENCE:
                             {json.dumps(review_evidence, indent=2)}
                             """
             }
         ]
+    
+    def deterministic_workspace_checks(self, user_task: str, review_evidence: dict) -> list[str]:
+        """
+            Fast deterministic checks before asking the LLM, these do not replace the LLM reviewer however they catch obvious workspace failures.
+        """
+        issues = []
 
+        route_scope = review_evidence.get("route_scope", {})
+        steps = review_evidence.get("steps", [])
+        workspace_diff = review_evidence.get("workspace_diff", {})
+
+        task_type = route_scope.get("task_type")
+        allow_mutations = route_scope.get("allow_mutations")
+        allowed_tools = set(route_scope.get("allowed_tools", []))
+
+        created_paths = workspace_diff.get("created_paths", [])
+        deleted_paths = workspace_diff.get("deleted_paths", [])
+
+        executed_tools = [step.get("tool") for step in steps if step.get("status") == "completed"]
+
+        if allowed_tools:
+            for tool_name in executed_tools:
+                if tool_name not in allowed_tools:
+                    issues.append(f"Tool '{tool_name}' was executed outside the allowed route scope.")
+
+        if allow_mutations is False:
+            for tool_name in executed_tools:
+                if tool_name in self.MUTATION_TOOLS:
+                    issues.append(f"Mutation tool '{tool_name}' was used even though mutations were not allowed.")
+
+        if task_type == "workspace_mutation":
+            real_mutation_tools = self.MUTATION_TOOLS
+            used_real_mutation = any(tool in real_mutation_tools for tool in executed_tools)
+
+            if not used_real_mutation:
+                issues.append("The task was a workspace mutation, but no real workspace mutation tool was executed.")
+
+            if not created_paths and not deleted_paths:
+                issues.append("The task was a workspace mutation, but workspace_before and workspace_after show no workspace change.")
+
+        return issues
+    
     def run(self, conversation_id: int, step_index: int, user_task: str, execution_response: dict, workspace_before: list = None, workspace_after: list = None,
             route: dict = None) -> Message:
         try:
@@ -190,10 +279,18 @@ class ReviewerAgent(Agent):
             review_evidence = self.build_review_evidence(executor_response=execution_response, workspace_before=workspace_before,
                                                          workspace_after=workspace_after, route=route)
             
-            messages = self.build_messages(user_task=user_task, review_evidence=review_evidence)
+            deterministic_issues = self.deterministic_workspace_checks(user_task=user_task, review_evidence=review_evidence)
 
-            review_response = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
-            self.validate_llm_response(review_response)
+            if deterministic_issues:
+                review_response = {
+                    "accepted": False,
+                    "review_summary": "Deterministic reviewer checks found workspace problems.",
+                    "issues": deterministic_issues
+                }
+            else:
+                messages = self.build_messages(user_task=user_task, review_evidence=review_evidence)
+                review_response = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
+                self.validate_llm_response(review_response)
 
             status = "completed"
             target_agent = None

@@ -194,4 +194,13 @@ Reject if:
 
 Do not reject merely because timestamps or ordering changed.
 Focus on meaningful file/folder differences.
+
+==================================================
+WORKSPACE MUTATION RESULT RULE
+
+If the CURRENT TASK asks to create, save, write, build, delete, move, copy, rename, or edit something in the workspace, do not accept a plan that only generated text.
+
+Generated text is not enough unless it was actually written into the workspace.
+
+Accept workspace mutation tasks only if the execution trace and workspace_after show that the requested workspace change happened.
 """
