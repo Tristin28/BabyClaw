@@ -1,5 +1,6 @@
 '''
     These global variables are representing the system’s rulebook for what actions the agents are allowed to use.
+    Where each component (module) share the same set of rules hence why these variables are centralised here to ensure consistency and ease of maintenance.
 '''
 DIRECT_RESPONSE_TOOLS = {"direct_response"}
 
