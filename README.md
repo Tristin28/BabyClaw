@@ -1,34 +1,60 @@
+Yes, you are right to question the wording.
+
+It is better to say:
+
+> BabyClaw uses Ollama to communicate with a local LLM.
+
+Rather than:
+
+> BabyClaw uses a local Ollama model.
+
+Because Ollama is the program/runtime that manages and serves the model. The actual model is something like `qwen2.5:3b`, `llama3`, etc. So the clean wording is:
+
+> BabyClaw uses Ollama as the local LLM runtime.
+
+Here is a shortened and cleaner README:
+
+````markdown
 # BabyClaw
 
 BabyClaw is a local coordinator-driven agentic system built around a routed
-planner-executor-reviewer workflow. It uses a local Ollama model to plan,
-generate responses, review execution results, and decide what long-term memory
+Planner → Executor → Reviewer workflow.
+
+It uses Ollama as the local LLM runtime. The LLM is used for planning, response
+generation, reviewing results, and deciding whether useful long-term memory
 should be stored.
 
-The system is designed so the LLM does not directly mutate the workspace.
-Instead, the LLM proposes structured plans, the infrastructure validates those
-plans, the executor runs only registered tools, and a reviewer checks the result
-before the workflow is considered successful.
+The main design goal is to keep the LLM controlled. The LLM does not directly
+mutate the workspace. Instead, it proposes structured plans, while the system
+validates, executes, reviews, and stores results through deterministic Python
+code.
+
+---
 
 ## Requirements
 
 - Python 3.11+
 - Ollama installed and running
-- A local Ollama model pulled, for example:
+- A local model pulled through Ollama
+- Python dependencies installed
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+````
+
+Pull a model:
 
 ```bash
 ollama pull qwen2.5:3b
 ```
 
-Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
+---
 
 ## Running BabyClaw
 
-Run the command-line interface:
+Run the CLI:
 
 ```bash
 python -m src.Main
@@ -46,19 +72,13 @@ Then open:
 http://127.0.0.1:5000
 ```
 
-## Basic CLI Commands
+---
 
-Inside the CLI, you can type normal tasks such as:
+## CLI Commands
 
-```text
-Explain recursion simply
-Create notes.txt with hello
-Read README.md
-Summarise README.md
-Create a simple hello world Python file called hello.py
-```
+Inside the CLI, the user can type normal natural-language tasks.
 
-Utility commands:
+Utility commands include:
 
 ```text
 help
@@ -80,9 +100,11 @@ debug off
 The workspace path controls where file tools can read and write. File operations
 are sandboxed inside the configured workspace.
 
-## How The System Works
+---
 
-The main runtime pipeline is:
+## Main System Structure
+
+The main workflow is:
 
 ```text
 User task
@@ -97,24 +119,17 @@ User task
   -> Final response
 ```
 
-### 1. Coordinator
+Each part has a focused responsibility.
 
-The `Coordinator` is the main orchestrator. It receives the user's task and
-controls the whole workflow.
+---
 
-It is responsible for:
+## Coordinator
 
-- storing the user message,
-- running the router,
-- building planner input,
-- retrying failed plans,
-- running the executor,
-- asking the user for permission before workspace mutations,
-- sending execution results to the reviewer,
-- rolling back rejected or failed mutations,
-- triggering replanning after reviewer rejection,
-- storing long-term memory after successful workflows,
-- returning the final user-facing result.
+The `Coordinator` is the main orchestrator.
+
+It receives the user task, controls the workflow, routes messages between agents,
+handles permission requests, triggers rollback when needed, and returns the final
+response to the user.
 
 Relevant file:
 
@@ -122,19 +137,14 @@ Relevant file:
 src/Agents/Coordinator.py
 ```
 
-### 2. RouteAgent
+---
 
-The `RouteAgent` classifies the current user task. It does not answer the user
-and does not choose tools directly.
+## RouteAgent
 
-It classifies tasks into:
+The `RouteAgent` classifies the user task.
 
-- `direct_response`
-- `memory_question`
-- `contextual_followup`
-- `workspace_read`
-- `workspace_summarise`
-- `workspace_mutation`
+It decides whether the task is a direct response, memory question, contextual
+follow-up, workspace read, workspace summary, or workspace mutation.
 
 Relevant files:
 
@@ -143,35 +153,37 @@ src/Agents/Routing/RouteAgent.py
 src/Agents/Routing/WorkflowPolicy.py
 ```
 
-### 3. WorkflowPolicy
+---
 
-`WorkflowPolicyRegistry` converts the route classification into a strict
-workflow contract.
+## WorkflowPolicy
 
-The policy decides:
+The `WorkflowPolicyRegistry` converts the route classification into a strict
+workflow scope.
 
-- which tools are allowed,
-- whether workspace access is allowed,
-- whether mutations are allowed,
-- whether recent messages are included,
-- which memory mode is used.
+It decides:
 
-This keeps the LLM scoped. For example, a normal chat answer should not receive
-file mutation tools.
+* which tools are allowed,
+* whether workspace access is allowed,
+* whether mutation is allowed,
+* whether recent messages should be included,
+* which memory mode should be used.
 
-### 4. PlannerAgent
+This prevents the LLM from receiving unnecessary or unsafe tools.
 
-The `PlannerAgent` converts the current task into a small JSON plan using only
-the tools selected by the coordinator.
+Relevant file:
 
-The planner is instructed to:
+```text
+src/Agents/Routing/WorkflowPolicy.py
+```
 
-- use the fewest useful steps,
-- preserve the current user task,
-- avoid inventing files, paths, tools, or arguments,
-- use direct arguments when known,
-- use `*_step` arguments only when a value comes from an earlier step,
-- avoid treating every use of the word "write" as a file operation.
+---
+
+## PlannerAgent
+
+The `PlannerAgent` converts the user task into a small structured plan.
+
+The planner can only use tools allowed by the active workflow policy. Its output
+is not executed directly. It must first pass through the `PlanCompiler`.
 
 Relevant files:
 
@@ -180,42 +192,14 @@ src/Agents/Planning/PlannerAgent.py
 src/Agents/Planning/PlannerPrompt.py
 ```
 
-Example plan shape:
+---
 
-```json
-{
-  "goal": "Create hello.py with a simple hello world function.",
-  "steps": [
-    {
-      "id": 1,
-      "tool": "create_file",
-      "args": {
-        "path": "hello.py",
-        "content": "def hello_world():\n    print('Hello world')\n"
-      }
-    }
-  ],
-  "planning_rationale": "The user asked to create a file with known content."
-}
-```
-
-### 5. PlanCompiler
+## PlanCompiler
 
 The `PlanCompiler` validates and normalises the planner output before execution.
 
-It rejects common bad plans, including:
-
-- unknown tools,
-- unknown arguments,
-- missing required arguments,
-- invalid `*_step` references,
-- future step references,
-- fake step references inside strings,
-- unsafe paths,
-- absolute paths,
-- path traversal attempts,
-- workspace mutations targeting the workspace root,
-- workspace mutation tasks that do not include a real mutation tool.
+It rejects invalid plans, unsafe paths, unknown tools, missing arguments, invalid
+step references, and unsafe workspace mutations.
 
 Relevant file:
 
@@ -223,22 +207,14 @@ Relevant file:
 src/Agents/Planning/PlanCompiler.py
 ```
 
-### 6. ExecutorAgent
+---
 
-The `ExecutorAgent` runs compiled plan steps through the registered tools.
+## ExecutorAgent
 
-It tracks:
+The `ExecutorAgent` runs the compiled plan using registered tools.
 
-- remaining steps,
-- completed step results,
-- step status,
-- execution trace,
-- approved actions,
-- rollback snapshots,
-- route scope.
-
-Before executing a step, it checks that the tool is allowed by the current route
-and that mutations are permitted.
+It checks that every tool is allowed by the current route scope and that mutation
+tools only run when mutation is permitted and approved.
 
 Relevant file:
 
@@ -246,104 +222,63 @@ Relevant file:
 src/Agents/ExecutorAgent.py
 ```
 
-### 7. Tools
+---
 
-Planner-facing tool descriptions live in:
+## Tools
+
+Tools are split into descriptions and runtime implementations.
+
+Planner-facing tool descriptions:
 
 ```text
 src/tools/tool_description.py
 ```
 
-Runtime tool registration lives in:
+Runtime tool registry:
 
 ```text
 src/tools/tool_registry.py
 ```
 
-File tools live in:
+File tools:
 
 ```text
 src/tools/file_tools.py
 ```
 
-LLM-backed tools live in:
+LLM-backed tools:
 
 ```text
 src/tools/llm_tools.py
 ```
 
-Available tools include:
+Available tools include file reading, file writing, directory operations, text
+searching, direct responses, and LLM-backed content generation.
 
-- `direct_response`
-- `generate_content`
-- `read_file`
-- `summarise_txt`
-- `list_dir`
-- `list_tree`
-- `find_file`
-- `find_file_recursive`
-- `search_text`
-- `create_file`
-- `write_file`
-- `append_file`
-- `delete_file`
-- `replace_text`
-- `create_dir`
-- `delete_dir`
-- `move_path`
-- `copy_path`
+---
 
-### 8. Permission And Rollback
+## Permission and Rollback
 
-Workspace mutation tools require user permission. Examples include:
+Workspace mutation tools require user permission before execution.
 
-- `create_file`
-- `write_file`
-- `append_file`
-- `delete_file`
-- `replace_text`
-- `create_dir`
-- `delete_dir`
-- `move_path`
-- `copy_path`
+Mutation tools include actions such as creating, writing, deleting, moving, or
+copying files and directories.
 
-Before running those tools, the coordinator returns a permission request showing
-the pending tools and resolved arguments.
+Before a mutation runs, the coordinator shows the pending action and waits for
+approval.
 
-If the user approves, execution continues. If the user rejects, the workflow is
-cancelled.
+If execution fails or the reviewer rejects the result, BabyClaw attempts to roll
+back workspace changes where possible.
 
-For mutating tools, rollback snapshots are taken before execution. If execution
-fails or the reviewer rejects the result, the coordinator uses those snapshots
-to undo side effects where possible.
+---
 
-### 9. ReviewerAgent
+## ReviewerAgent
 
-The `ReviewerAgent` checks whether the executed result satisfies the current
+The `ReviewerAgent` checks whether the execution result satisfies the original
 user task.
 
-It performs deterministic checks for objective workflow facts:
-
-- executed tools must be inside `route_scope.allowed_tools`,
-- mutation tools must not run when mutations are not allowed,
-- workspace mutation tasks must use at least one real mutation tool,
-- workspace mutation tasks must show either path changes or a content-changing
-  tool such as `write_file`, `append_file`, or `replace_text`.
-
-It also asks the LLM reviewer to judge semantic sufficiency. For example, if the
-user asks for a game but the created file only contains hello-world code, the
-reviewer should reject it because the artifact does not meaningfully satisfy the
-requested outcome.
-
-For generated/written files, review evidence includes:
-
-- execution trace,
-- resolved arguments,
-- written content,
-- final saved file content when available,
-- workspace before/after,
-- workspace diff,
-- route scope.
+It performs deterministic checks over workflow rules and also uses the LLM to
+judge whether the result is semantically good enough.
 
 Relevant files:
 
@@ -352,33 +287,16 @@ src/Agents/Reviewing/ReviewerAgent.py
 src/Agents/Reviewing/ReviewPrompt.py
 ```
 
-### 10. MemoryAgent
+---
 
-The `MemoryAgent` has two responsibilities.
+## MemoryAgent
 
-First, it stores all workflow messages in SQLite so the system has a trace of
-what happened.
+The `MemoryAgent` stores workflow messages and selected long-term memories.
 
-Second, after a successful workflow, it asks the LLM whether the user's latest
-message contains stable long-term memory. It stores only explicit user facts or
-preferences, not temporary task details.
+It stores message history in SQLite so the system has a trace of what happened.
 
-Examples of memory-worthy statements:
-
-```text
-My name is Tristin.
-I prefer short explanations.
-My friend Jake is helping me with this project.
-```
-
-Examples of things it should not store:
-
-```text
-Create hello.txt
-Read README.md
-Use write_file
-The planner created a file
-```
+It stores long-term memory in a vector database only when the user gives stable
+and useful information that may help future conversations.
 
 Relevant files:
 
@@ -389,17 +307,47 @@ src/Memory/VectorRepository.py
 src/Memory/sql_database.py
 ```
 
-SQLite messages are stored in:
+SQLite message history:
 
 ```text
 Memory/memory.db
 ```
 
-Vector memories are stored in:
+Vector memory:
 
 ```text
 Memory/chroma_db
 ```
+
+---
+
+## Message Instances in the Memory Tab
+
+A message instance is one stored workflow message.
+
+It represents one communication between the user, coordinator, or one of the
+agents.
+
+A message instance usually contains:
+
+```text
+conversation_id: which conversation the message belongs to
+step_index: where the message happened in the workflow
+sender: who created the message
+receiver: who received the message
+target_agent: which agent should handle it next, if any
+message_type: what kind of message it is
+status: whether it completed, failed, or is waiting
+response: the main stored content
+visibility: whether it is internal or user-facing
+timestamp: when it was created
+```
+
+The memory tab may look technical because it stores the system’s internal
+workflow trace. It is not random data. It shows how a task moved through
+BabyClaw.
+
+---
 
 ## Project Structure
 
@@ -407,39 +355,38 @@ Memory/chroma_db
 src/
   Main.py                         CLI entry point
   gui.py                          Flask web UI
-  OllamaClient.py                 Ollama wrapper
-  message.py                      Shared message DTO
+  OllamaClient.py                 Ollama communication wrapper
+  message.py                      Shared message object
 
   Agents/
-    BaseAgent.py                  Shared base agent helper
     Coordinator.py                Main workflow orchestrator
     ExecutorAgent.py              Tool executor
-    MemoryAgent.py                Message and long-term memory manager
+    MemoryAgent.py                Message and memory manager
 
     Routing/
       RouteAgent.py               Classifies user tasks
-      WorkflowPolicy.py           Converts task type into allowed scope/tools
+      WorkflowPolicy.py           Defines allowed workflow scope
 
     Planning/
-      PlannerAgent.py             Builds structured tool plans
-      PlannerPrompt.py            Planner system prompt
-      PlanCompiler.py             Validates and normalises plans
+      PlannerAgent.py             Builds structured plans
+      PlannerPrompt.py            Planner prompt
+      PlanCompiler.py             Validates plans before execution
 
     Reviewing/
-      ReviewerAgent.py            Reviews execution result
-      ReviewPrompt.py             Reviewer system prompt
+      ReviewerAgent.py            Reviews execution results
+      ReviewPrompt.py             Reviewer prompt
 
   Memory/
-    sql_database.py               SQLite connection/init
-    MessageRepository.py          SQL message storage
-    VectorRepository.py           Chroma vector memory storage
+    sql_database.py               SQLite setup
+    MessageRepository.py          Stores workflow messages
+    VectorRepository.py           Stores long-term vector memories
 
   tools/
-    tool_description.py           Planner-facing tool definitions
+    tool_description.py           Tool descriptions for the planner
     tool_registry.py              Runtime tool registry
     file_tools.py                 Workspace file operations
     llm_tools.py                  LLM-backed tools
-    utils.py                      Workspace sandbox config
+    utils.py                      Workspace sandbox helpers
 
 tests/
   PlannerTest.py
@@ -449,42 +396,38 @@ tests/
   MemoryAgentTest.py
 ```
 
+---
+
 ## Testing
 
-The test filenames do not follow pytest's default `test_*.py` pattern, so run
-them explicitly:
+Run tests explicitly:
 
 ```bash
 pytest -q tests/PlannerTest.py tests/ReviewerTest.py tests/PipelineTest.py tests/ExecutorTest.py tests/MemoryAgentTest.py
 ```
 
-The tests cover:
+The tests cover planning, compiling, execution, reviewing, rollback, replanning,
+and memory behaviour.
 
-- planner/compiler validation,
-- unsafe path rejection,
-- fake step reference rejection,
-- executor behavior,
-- reviewer acceptance/rejection,
-- semantic review evidence,
-- rollback and replanning,
-- memory behavior.
+---
 
 ## Design Goal
 
-BabyClaw is not designed to make hallucinations impossible. Instead, it reduces
-risk by wrapping the LLM in deterministic infrastructure:
+BabyClaw is designed to make agent workflows more controlled and inspectable.
 
-- route-scoped tool access,
-- structured planning,
-- plan compilation,
-- workspace sandboxing,
-- mutation permission,
-- runtime route enforcement,
-- reviewer checks,
-- rollback,
-- replanning,
-- controlled memory storage.
+It reduces risk through:
 
-The LLM still matters. A stronger model can produce better plans and better
-content. The architecture makes those plans safer to execute and easier to
-reject when they do not satisfy the user's task.
+* route-scoped tool access,
+* structured planning,
+* plan validation,
+* workspace sandboxing,
+* mutation permission,
+* reviewer checks,
+* rollback support,
+* controlled memory storage.
+
+The LLM still helps with reasoning, but deterministic code controls how the
+workflow actually runs.
+
+```
+```
