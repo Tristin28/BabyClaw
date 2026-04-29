@@ -702,9 +702,7 @@ class Coordinator():
         accepted = reviewer_msg.response.get("accepted", False)
 
         if not accepted:
-            #Reviewer rejected the work, so any side-effects (created/modified/deleted files)
-            #must be undone here. Previously rollback_results was hardcoded to [] and the
-            #workspace was left dirty after a rejection.
+            #Reviewer rejected the work, so any side-effects (created/modified/deleted files) must be undone here. 
             rollback_results = self.rollback_execution(executor_response=executor_response)
 
             issues = reviewer_response.get("issues", [])
