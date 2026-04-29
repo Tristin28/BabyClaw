@@ -452,3 +452,57 @@ def test_multiple_explicit_paths_allow_move_source_and_destination(tmp_path):
 
     assert compiled["steps"][0]["args"]["source_path"] == "draft.txt"
     assert compiled["steps"][0]["args"]["destination_path"] == "final.txt"
+
+
+def test_exact_write_text_is_enforced_when_planner_substitutes_content(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create a text file and write Tristin inside it"
+    )
+
+    plan = {
+        "goal": "Create generic file",
+        "steps": [
+            {
+                "id": 1,
+                "tool": "create_file",
+                "args": {
+                    "path": "test.txt",
+                    "content": "Hello, world!"
+                }
+            }
+        ],
+        "planning_rationale": "Bad content drift."
+    }
+
+    compiled = compiler.compile(plan)
+
+    assert compiled["steps"][0]["args"]["path"] == "test.txt"
+    assert compiled["steps"][0]["args"]["content"] == "Tristin"
+
+
+def test_exact_write_text_is_enforced_for_inside_it_write_order(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create a text file and inside it write Tristin"
+    )
+
+    plan = {
+        "goal": "Create hello world file",
+        "steps": [
+            {
+                "id": 1,
+                "tool": "create_file",
+                "args": {
+                    "path": "hello_world.txt",
+                    "content": "Hello, World!"
+                }
+            }
+        ],
+        "planning_rationale": "Bad content drift."
+    }
+
+    compiled = compiler.compile(plan)
+
+    assert compiled["steps"][0]["args"]["path"] == "hello_world.txt"
+    assert compiled["steps"][0]["args"]["content"] == "Tristin"

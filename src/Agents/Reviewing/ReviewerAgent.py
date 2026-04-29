@@ -2,6 +2,7 @@ from src.agents.BaseAgent import Agent
 from src.llm.OllamaClient import OllamaClient
 from src.core.message import Message
 from src.agents.reviewing.ReviewPrompt import REVIEWER_SYSTEM_PROMPT
+from src.action_constants import MUTATION_TOOLS, CONTENT_WRITING_TOOLS, GENERATED_ARTIFACT_TERMS, CREATIVE_ARTIFACT_PREFIXES
 import json 
 import re
 
@@ -32,23 +33,8 @@ class ReviewerAgent(Agent):
         "additionalProperties": False
     }
 
-    MUTATION_TOOLS = {
-        "create_file",
-        "write_file",
-        "append_file",
-        "delete_file",
-        "replace_text",
-        "create_dir",
-        "delete_dir",
-        "move_path",
-        "copy_path"
-    }
-
-    CONTENT_WRITING_TOOLS = {
-        "create_file",
-        "write_file",
-        "append_file"
-    }
+    MUTATION_TOOLS = MUTATION_TOOLS
+    CONTENT_WRITING_TOOLS = CONTENT_WRITING_TOOLS
 
     def __init__(self, llm_client: OllamaClient, workspace_config=None):
         super().__init__("reviewer")
@@ -354,7 +340,10 @@ class ReviewerAgent(Agent):
             return None
 
         patterns = [
+            r"\b(?:inside|into|in)\s+(?:it|this|that|a\s+text\s+file|the\s+text\s+file|a\s+file|the\s+file)\s+write\s+(.+)$",
             r"\bwrite\s+(.+?)\s+(?:into|to|in)\s+[\w./ -]+\.[A-Za-z0-9]{1,12}\b",
+            r"\bwrite\s+(.+?)\s+(?:inside|into|to|in)\s+(?:it|this|that|a\s+text\s+file|the\s+text\s+file|a\s+file|the\s+file)\b",
+            r"\bcreate\s+(?:a\s+)?(?:text\s+)?file\s+(?:with|containing)\s+(.+)$",
             r"\bcreate\s+[\w./ -]+\.[A-Za-z0-9]{1,12}\s+with\s+(.+)$",
         ]
 
@@ -371,7 +360,10 @@ class ReviewerAgent(Agent):
                 if " about " in f" {lowered_text} ":
                     continue
 
-                if lowered_text.startswith(("a poem", "an poem", "poem", "a story", "short story", "a letter", "an email")):
+                if lowered_text.startswith(CREATIVE_ARTIFACT_PREFIXES):
+                    continue
+
+                if any(term in lowered_text for term in GENERATED_ARTIFACT_TERMS):
                     continue
 
                 return text

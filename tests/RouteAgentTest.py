@@ -117,3 +117,15 @@ def test_poem_in_chat_routes_to_direct_response():
     )
 
     assert msg.response["task_type"] == "direct_response"
+
+
+def test_create_text_file_and_inside_it_write_routes_to_workspace_mutation():
+    router = RouteAgent(llm_client=FakeRouterLLM(task_type="direct_response"))
+
+    msg = router.run(
+        conversation_id=1,
+        step_index=1,
+        user_task="Create a text file and inside it write Tristin"
+    )
+
+    assert msg.response["task_type"] == "workspace_mutation"

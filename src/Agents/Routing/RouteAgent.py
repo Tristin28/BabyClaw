@@ -228,6 +228,10 @@ class RouteAgent(Agent):
         task = " ".join(user_task.strip().lower().split())
 
         file_output_phrases = [
+            "create a text file",
+            "create text file",
+            "create a file",
+            "create file",
             "in a text file",
             "into a text file",
             "in a file",
@@ -246,7 +250,21 @@ class RouteAgent(Agent):
             "put the output in a file",
         ]
 
-        return contains_any(task, file_output_phrases)
+        if contains_any(task, file_output_phrases):
+            return True
+
+        file_action_patterns = [
+            ("create", "file"),
+            ("create", "text file"),
+            ("write", "inside it"),
+            ("write", "inside this"),
+            ("write", "inside that"),
+            ("write", "inside the file"),
+            ("write", "inside a file"),
+            ("write", "inside a text file"),
+        ]
+
+        return any(action in task and target in task for action, target in file_action_patterns)
 
     def normalise_response(self, user_task: str, response: dict) -> dict:
         """

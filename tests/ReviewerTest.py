@@ -572,3 +572,107 @@ def test_reviewer_accepts_exact_hello_world_written_to_file(tmp_path):
     assert msg.status == "completed"
     assert msg.response["accepted"] is True
     assert msg.response["issues"] == []
+
+
+def test_reviewer_rejects_wrong_exact_text_written_inside_unspecified_file(tmp_path):
+    class RejectingReviewerLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            raise AssertionError("Deterministic exact text check should reject before the LLM reviewer")
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    target_file = workspace_root / "test.txt"
+    target_file.write_text("Hello, world!", encoding="utf-8")
+
+    reviewer = ReviewerAgent(
+        llm_client=RejectingReviewerLLM(),
+        workspace_config=WorkspaceConfig(root=str(workspace_root))
+    )
+
+    execution_response = {
+        "goal": "Create a text file and write Tristin inside it",
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "create_file",
+                "status": "completed",
+                "args": {"path": "test.txt", "content": "Hello, world!"},
+                "resolved_args": {"path": "test.txt", "content": "Hello, world!"},
+                "result": "File 'test.txt' created successfully."
+            }
+        ]
+    }
+
+    msg = reviewer.run(
+        conversation_id=1,
+        step_index=3,
+        user_task="Create a text file and write Tristin inside it",
+        execution_response=execution_response,
+        workspace_before=[],
+        workspace_after=["test.txt"],
+        route={
+            "task_type": "workspace_mutation",
+            "tool_group": "mutation_file_tools",
+            "use_workspace": True,
+            "allow_mutations": True,
+            "allowed_tools": ["create_file"],
+        }
+    )
+
+    assert msg.status == "completed"
+    assert msg.response["accepted"] is False
+    assert msg.response["issues"] == [
+        "The file was written, but the content does not contain the requested text 'Tristin'."
+    ]
+
+
+def test_reviewer_rejects_wrong_exact_text_for_inside_it_write_order(tmp_path):
+    class RejectingReviewerLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            raise AssertionError("Deterministic exact text check should reject before the LLM reviewer")
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    target_file = workspace_root / "hello_world.txt"
+    target_file.write_text("Hello, World!", encoding="utf-8")
+
+    reviewer = ReviewerAgent(
+        llm_client=RejectingReviewerLLM(),
+        workspace_config=WorkspaceConfig(root=str(workspace_root))
+    )
+
+    execution_response = {
+        "goal": "Create a text file and inside it write Tristin",
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "create_file",
+                "status": "completed",
+                "args": {"path": "hello_world.txt", "content": "Hello, World!"},
+                "resolved_args": {"path": "hello_world.txt", "content": "Hello, World!"},
+                "result": "File 'hello_world.txt' created successfully."
+            }
+        ]
+    }
+
+    msg = reviewer.run(
+        conversation_id=1,
+        step_index=3,
+        user_task="Create a text file and inside it write Tristin",
+        execution_response=execution_response,
+        workspace_before=[],
+        workspace_after=["hello_world.txt"],
+        route={
+            "task_type": "workspace_mutation",
+            "tool_group": "mutation_file_tools",
+            "use_workspace": True,
+            "allow_mutations": True,
+            "allowed_tools": ["create_file"],
+        }
+    )
+
+    assert msg.status == "completed"
+    assert msg.response["accepted"] is False
+    assert msg.response["issues"] == [
+        "The file was written, but the content does not contain the requested text 'Tristin'."
+    ]

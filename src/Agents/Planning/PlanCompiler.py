@@ -1,6 +1,7 @@
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
+from src.action_constants import MUTATION_TOOLS, MUTATION_PATH_ARGS, GENERATED_ARTIFACT_TERMS, CREATIVE_ARTIFACT_PREFIXES
 from src.tools.utils import WorkspaceConfig
 
 class PlanCompiler:
@@ -15,19 +16,8 @@ class PlanCompiler:
         "args": dict,
     }
 
-    MUTATION_TOOLS = {
-        "create_file",
-        "write_file",
-        "append_file",
-        "delete_file",
-        "replace_text",
-        "create_dir",
-        "delete_dir",
-        "move_path",
-        "copy_path",
-    }
-
-    MUTATION_PATH_ARGS = {"path", "source_path", "destination_path", "directory"}
+    MUTATION_TOOLS = MUTATION_TOOLS
+    MUTATION_PATH_ARGS = MUTATION_PATH_ARGS
 
     def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None, route: dict = None, user_task: str = ""):
         """
@@ -367,6 +357,75 @@ class PlanCompiler:
                 args[bare_step_arg] = candidate_ids[0]
 
             step["args"] = args
+
+    def extract_exact_written_text(self, user_task: str) -> str | None:
+        if not isinstance(user_task, str):
+            return None
+
+        patterns = [
+            r"\b(?:inside|into|in)\s+(?:it|this|that|a\s+text\s+file|the\s+text\s+file|a\s+file|the\s+file)\s+write\s+(.+)$",
+            r"\bwrite\s+(.+?)\s+(?:inside|into|to|in)\s+(?:it|this|that|a\s+text\s+file|the\s+text\s+file|a\s+file|the\s+file|[\w./ -]+\.[A-Za-z0-9]{1,12})\b",
+            r"\bcreate\s+(?:a\s+)?(?:text\s+)?file\s+(?:with|containing)\s+(.+)$",
+            r"\bcreate\s+[\w./ -]+\.[A-Za-z0-9]{1,12}\s+with\s+(.+)$",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, user_task, flags=re.IGNORECASE)
+            if not match:
+                continue
+
+            text = match.group(1).strip(" .,!?:;\"'")
+            if not text:
+                continue
+
+            lowered_text = text.lower()
+
+            if " about " in f" {lowered_text} ":
+                continue
+
+            if lowered_text.startswith(CREATIVE_ARTIFACT_PREFIXES):
+                continue
+
+            if any(term in lowered_text for term in GENERATED_ARTIFACT_TERMS):
+                continue
+
+            return text
+
+        return None
+
+    def enforce_exact_written_text(self, steps: list[dict]) -> None:
+        """
+            Literal user-provided file content is not planner-owned. The planner
+            may infer a filename when none was provided, but it must not replace
+            "write <NAME>" with generic content like "Hello, world!".
+        """
+        exact_text = self.extract_exact_written_text(self.user_task)
+        if exact_text is None:
+            return
+
+        content_tools = {"create_file", "write_file", "append_file"}
+        updated = False
+
+        for step in steps:
+            if step.get("tool") not in content_tools:
+                continue
+
+            args = step.get("args", {})
+            if "content_step" in args:
+                continue
+
+            if "content" not in args:
+                continue
+
+            args["content"] = exact_text
+            step["args"] = args
+            updated = True
+
+        if not updated:
+            raise ValueError(
+                f"Plan rejected: the user explicitly asked to write '{exact_text}', "
+                "but no direct file-writing content argument used that text."
+            )
                     
     def compile(self, raw_plan: dict) -> dict:
         self.validate_top_level_schema(raw_plan)
@@ -376,6 +435,7 @@ class PlanCompiler:
         normalised_steps = self.remap_step_arguments(normalised_steps)
 
         normalised_steps = self.apply_safe_defaults(normalised_steps)
+        self.enforce_exact_written_text(normalised_steps)
         self.repair_placeholder_chains(normalised_steps)
         self.repair_bare_step_marker_args(normalised_steps)
         self.reject_fake_step_strings(normalised_steps)

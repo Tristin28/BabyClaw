@@ -76,3 +76,35 @@ def test_execution_verifier_rejects_written_file_with_wrong_content(tmp_path):
 
     assert result["accepted"] is False
     assert any("final content differs" in issue for issue in result["issues"])
+
+
+def test_execution_verifier_accepts_create_then_write_same_file_final_content(tmp_path):
+    verifier, workspace_root = make_verifier(tmp_path)
+    target = workspace_root / "name.txt"
+    target.write_text("Tristin", encoding="utf-8")
+
+    result = verifier.verify({
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "create_file",
+                "status": "completed",
+                "resolved_args": {
+                    "path": "name.txt",
+                    "content": ""
+                }
+            },
+            {
+                "id": 2,
+                "tool": "write_file",
+                "status": "completed",
+                "resolved_args": {
+                    "path": "name.txt",
+                    "content": "Tristin"
+                }
+            }
+        ]
+    })
+
+    assert result["accepted"] is True
+    assert result["issues"] == []

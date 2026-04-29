@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from src.action_constants import DIRECT_RESPONSE_TOOLS, READ_FILE_TOOLS, SUMMARISE_FILE_TOOLS, MUTATION_FILE_TOOLS
 
 @dataclass(frozen=True) 
 class WorkflowPolicy:
@@ -17,43 +18,10 @@ class WorkflowPolicyRegistry:
         This keeps the LLM flexible while the infrastructure decides scope.
     """
 
-    DIRECT_RESPONSE_TOOLS = {"direct_response"}
-
-    READ_FILE_TOOLS = {
-        "read_file",
-        "find_file",
-        "find_file_recursive",
-        "list_dir",
-        "list_tree",
-        "search_text"
-    }
-
-    SUMMARISE_FILE_TOOLS = {
-        "read_file",
-        "find_file",
-        "find_file_recursive",
-        "summarise_txt"
-    }
-
-    MUTATION_FILE_TOOLS = {
-        "generate_content",
-        "create_file",
-        "write_file",
-        "append_file",
-        "delete_file",
-        "replace_text",
-        "create_dir",
-        "delete_dir",
-        "move_path",
-        "copy_path",
-        "find_file",
-        "find_file_recursive",
-        "list_dir",
-        "list_tree",
-        "read_file",
-        "summarise_txt",
-        "search_text"
-    }
+    DIRECT_RESPONSE_TOOLS = DIRECT_RESPONSE_TOOLS
+    READ_FILE_TOOLS = READ_FILE_TOOLS
+    SUMMARISE_FILE_TOOLS = SUMMARISE_FILE_TOOLS
+    MUTATION_FILE_TOOLS = MUTATION_FILE_TOOLS
 
     POLICIES = {
         "direct_response": WorkflowPolicy(

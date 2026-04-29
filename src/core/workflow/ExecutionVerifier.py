@@ -1,4 +1,5 @@
 from src.tools.utils import WorkspaceConfig
+from src.action_constants import CONTENT_MUTATION_TOOLS
 
 class ExecutionVerifier:
     """
@@ -14,8 +15,9 @@ class ExecutionVerifier:
 
     def verify(self, executor_response: dict) -> dict:
         issues = []
+        execution_trace = executor_response.get("execution_trace", [])
 
-        for step in executor_response.get("execution_trace", []):
+        for step in execution_trace:
             if step.get("status") != "completed":
                 continue
 
@@ -23,7 +25,12 @@ class ExecutionVerifier:
             resolved_args = step.get("resolved_args", {})
 
             try:
-                issue = self.verify_step(tool_name=tool_name, resolved_args=resolved_args)
+                issue = self.verify_step(
+                    tool_name=tool_name,
+                    resolved_args=resolved_args,
+                    step=step,
+                    execution_trace=execution_trace
+                )
             except Exception as exc:
                 issue = f"Execution verification failed for tool '{tool_name}': {exc}"
 
@@ -43,8 +50,12 @@ class ExecutionVerifier:
             "issues": []
         }
 
-    def verify_step(self, tool_name: str, resolved_args: dict) -> str | None:
+    def verify_step(self, tool_name: str, resolved_args: dict, step: dict = None,
+                    execution_trace: list[dict] = None) -> str | None:
         if tool_name == "create_file":
+            if self.has_later_content_mutation(step=step, execution_trace=execution_trace):
+                return self.verify_file_exists_as_file(path=resolved_args.get("path"))
+
             return self.verify_file_exact_content(
                 path=resolved_args.get("path"),
                 content=resolved_args.get("content", ""),
@@ -95,6 +106,40 @@ class ExecutionVerifier:
 
         return None
 
+    def has_later_content_mutation(self, step: dict = None, execution_trace: list[dict] = None) -> bool:
+        if not step or not execution_trace:
+            return False
+
+        path = (step.get("resolved_args") or {}).get("path")
+        step_id = step.get("id")
+        workflow_iteration = step.get("workflow_iteration", 1)
+
+        if not path or step_id is None:
+            return False
+
+        current_key = (workflow_iteration, step_id)
+
+        for later_step in execution_trace:
+            if later_step.get("status") != "completed":
+                continue
+
+            later_key = (
+                later_step.get("workflow_iteration", 1),
+                later_step.get("id", 0)
+            )
+
+            if later_key <= current_key:
+                continue
+
+            if later_step.get("tool") not in CONTENT_MUTATION_TOOLS:
+                continue
+
+            later_path = (later_step.get("resolved_args") or {}).get("path")
+            if later_path == path:
+                return True
+
+        return False
+
     def resolve_path(self, path: str):
         if not isinstance(path, str) or path.strip() == "":
             raise ValueError("missing path")
@@ -106,6 +151,17 @@ class ExecutionVerifier:
 
         if not target.exists():
             return f"Expected {expected_kind} '{path}' to exist after execution, but it does not."
+
+        return None
+
+    def verify_file_exists_as_file(self, path: str) -> str | None:
+        target = self.resolve_path(path)
+
+        if not target.exists():
+            return f"Expected file '{path}' to exist after execution, but it does not."
+
+        if not target.is_file():
+            return f"Expected '{path}' to be a file after execution, but it is not."
 
         return None
 
