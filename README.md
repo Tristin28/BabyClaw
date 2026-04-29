@@ -89,6 +89,7 @@ User task
   -> Coordinator
   -> RouteAgent
   -> WorkflowPolicyRegistry
+    -> MemoryRoutingPolicy
   -> PlannerAgent
   -> PlanCompiler
   -> ExecutorAgent
