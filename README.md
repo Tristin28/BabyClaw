@@ -1,20 +1,3 @@
-Yes, you are right to question the wording.
-
-It is better to say:
-
-> BabyClaw uses Ollama to communicate with a local LLM.
-
-Rather than:
-
-> BabyClaw uses a local Ollama model.
-
-Because Ollama is the program/runtime that manages and serves the model. The actual model is something like `qwen2.5:3b`, `llama3`, etc. So the clean wording is:
-
-> BabyClaw uses Ollama as the local LLM runtime.
-
-Here is a shortened and cleaner README:
-
-````markdown
 # BabyClaw
 
 BabyClaw is a local coordinator-driven agentic system built around a routed
