@@ -12,7 +12,7 @@
     a path the user picks survives between runs.
 
     Run with:
-        python -m src.gui
+        python -m src.app.gui
 
     The browser opens automatically at http://127.0.0.1:5000.
 """
@@ -27,15 +27,16 @@ from flask import Flask, jsonify, render_template, request
 
 from src.config.workspace_config import save_workspace_path, load_workspace_path
 
-from src.Agents.Planning.PlannerAgent import PlannerAgent
-from src.Agents.ExecutorAgent import ExecutorAgent
-from src.Agents.MemoryAgent import MemoryAgent
-from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
-from src.Agents.Coordinator import Coordinator
-from src.Agents.Routing.RouteAgent import RouteAgent
+from src.agents.planning.PlannerAgent import PlannerAgent
+from src.agents.execution.ExecutorAgent import ExecutorAgent
+from src.core.workflow.ExecutionVerifier import ExecutionVerifier
+from src.agents.memory.MemoryAgent import MemoryAgent
+from src.agents.reviewing.ReviewerAgent import ReviewerAgent
+from src.core.workflow.Coordinator import Coordinator
+from src.agents.routing.RouteAgent import RouteAgent
 
-from src.OllamaClient import OllamaClient
-from src.Memory.sql_database import DatabaseManager
+from src.llm.OllamaClient import DEFAULT_LLM_LOG_PATH, OllamaClient
+from src.memory.sql_database import DatabaseManager
 from src.tools.tool_registry import build_tool_registry
 from src.tools.tool_description import PLANNER_TOOL_DESCRIPTIONS
 from src.tools.utils import WorkspaceConfig
@@ -43,7 +44,7 @@ from src.tools.utils import WorkspaceConfig
 
 CONVERSATION_ID = 1
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MEMORY_DIR = PROJECT_ROOT / "Memory"
 DB_PATH = MEMORY_DIR / "memory.db"
 VECTOR_DIR = MEMORY_DIR / "chroma_db"
@@ -68,6 +69,7 @@ def build_system():
 
     planner = PlannerAgent(llm_client=llm_client, workspace_config=workspace)
     executor = ExecutorAgent(tool_registry=tool_registry)
+    execution_verifier = ExecutionVerifier(workspace_config=workspace)
     reviewer = ReviewerAgent(llm_client=llm_client, workspace_config=workspace)
     memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
     router = RouteAgent(llm_client=llm_client)
@@ -80,7 +82,8 @@ def build_system():
         planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
         tool_registry=tool_registry,
         llm_client=llm_client,
-        router=router
+        router=router,
+        execution_verifier=execution_verifier
     )
 
     return coordinator, workspace, memory
@@ -197,6 +200,41 @@ def load_recent_db_rows(limit: int = 50) -> list[dict]:
     return items
 
 
+def load_recent_llm_calls(limit: int = 50) -> list[dict]:
+    if not DEFAULT_LLM_LOG_PATH.exists():
+        return []
+
+    try:
+        lines = DEFAULT_LLM_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:
+        return [{
+            "timestamp": "",
+            "call_id": "",
+            "call_type": "error",
+            "model": "",
+            "options": {},
+            "messages": [],
+            "raw_response": f"Could not read LLM call log: {exc}",
+        }]
+
+    calls = []
+    for line in lines[-limit:]:
+        try:
+            calls.append(json.loads(line))
+        except Exception:
+            calls.append({
+                "timestamp": "",
+                "call_id": "",
+                "call_type": "invalid",
+                "model": "",
+                "options": {},
+                "messages": [],
+                "raw_response": line,
+            })
+
+    return calls
+
+
 COORDINATOR, WORKSPACE, MEMORY_AGENT = build_system()
 PENDING_PERMISSION = None
 WORKFLOW_LOCK = threading.Lock()
@@ -220,6 +258,7 @@ def state():
         "vector_db": str(VECTOR_DIR),
         "project_root": str(PROJECT_ROOT),
         "awaiting_permission": PENDING_PERMISSION is not None,
+        "workflow_running": WORKFLOW_LOCK.locked(),
     })
 
 
@@ -288,6 +327,23 @@ def get_memory():
     return jsonify({
         "vector_memories": _jsonable(vector_items),
         "recent_messages": _jsonable(sql_messages),
+    })
+
+
+@app.route("/api/llm-calls", methods=["GET"])
+def get_llm_calls():
+    raw_limit = request.args.get("limit", "50")
+
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        limit = 50
+
+    limit = max(1, min(limit, 200))
+
+    return jsonify({
+        "log_path": str(DEFAULT_LLM_LOG_PATH),
+        "llm_calls": _jsonable(load_recent_llm_calls(limit=limit)),
     })
 
 
@@ -388,7 +444,7 @@ def main():
     print(f"Opening {url} in your browser.\n")
 
     threading.Timer(1.0, lambda: webbrowser.open_new(url)).start()
-    app.run(host=host, port=port, debug=False)
+    app.run(host=host, port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

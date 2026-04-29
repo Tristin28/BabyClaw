@@ -1,7 +1,9 @@
-from src.Agents.ExecutorAgent import ExecutorAgent
-from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
-from src.Agents.Coordinator import Coordinator
-from src.message import Message
+from src.agents.execution.ExecutorAgent import ExecutorAgent
+from src.core.workflow.ExecutionVerifier import ExecutionVerifier
+from src.agents.reviewing.ReviewerAgent import ReviewerAgent
+from src.core.workflow.Coordinator import Coordinator
+from src.agents.routing.WorkflowPolicy import WorkflowPolicyRegistry
+from src.core.message import Message
 from src.tools.tool_registry import build_tool_registry
 from src.tools.tool_description import PLANNER_TOOL_DESCRIPTIONS
 from src.tools.utils import WorkspaceConfig
@@ -286,6 +288,16 @@ def test_reject_then_rollback_then_replan_then_succeed(tmp_path):
     # First execution should be rejected because it created unrelated_dir.
     # Coordinator should rollback and replan.
     # Second plan also needs permission.
+    assert message.message_type == "permission_request"
+    second_execution_state = message.response["execution_state"]
+    assert second_execution_state["approved_actions"] == set()
+    assert second_execution_state["approved_step_ids"] == set()
+    assert second_execution_state["step_results"] == {}
+    assert second_execution_state["step_status"] == {}
+    assert second_execution_state["execution_trace"] == []
+    assert len(second_execution_state["remaining_steps"]) == 1
+    assert second_execution_state["remaining_steps"][0]["args"]["path"] == "work.txt"
+
     message = approve_permission_if_needed(coordinator, message)
 
     assert message.status == "completed"
@@ -320,7 +332,7 @@ def test_planner_path_traversal_fails_before_permission_or_execution(tmp_path):
     """
         Unsafe paths should fail during plan compilation before permission or execution.
     """
-    from src.Agents.Planning.PlannerAgent import PlannerAgent
+    from src.agents.planning.PlannerAgent import PlannerAgent
 
     class PathTraversalLLM:
         def invoke_json(self, messages, stream=False, schema=None):
@@ -388,3 +400,398 @@ def test_replan_preserves_user_task_verbatim(tmp_path):
 
     # Reviewer feedback should NOT pollute the task field.
     assert "create_dir on unrelated_dir was not requested" not in replan_input["task"]
+
+
+def test_planning_retry_feedback_preserves_explicit_requested_path(tmp_path):
+    from src.agents.planning.PlannerAgent import PlannerAgent
+
+    class PathRepairLLM:
+        def __init__(self):
+            self.calls = []
+
+        def invoke_json(self, messages, stream=False, schema=None):
+            self.calls.append(messages)
+
+            if len(self.calls) == 1:
+                return {
+                    "goal": "Create hello world program",
+                    "steps": [
+                        {
+                            "id": 1,
+                            "tool": "create_file",
+                            "args": {
+                                "path": "hello_world.py",
+                                "content": "print('hello world')"
+                            }
+                        }
+                    ],
+                    "planning_rationale": "Bad inferred filename."
+                }
+
+            return {
+                "goal": "Create hello world program at requested path",
+                "steps": [
+                    {
+                        "id": 1,
+                        "tool": "create_dir",
+                        "args": {"path": "src"}
+                    },
+                    {
+                        "id": 2,
+                        "tool": "create_file",
+                        "args": {
+                            "path": "src/main.py",
+                            "content": "print('hello world')"
+                        }
+                    }
+                ],
+                "planning_rationale": "Use the explicit requested path."
+            }
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    workspace = WorkspaceConfig(root=str(workspace_root))
+    llm = PathRepairLLM()
+
+    planner = PlannerAgent(
+        llm_client=llm,
+        workspace_config=workspace
+    )
+
+    memory = FakeMemory()
+    tool_registry = build_tool_registry(
+        llm_client=llm,
+        workspace=workspace
+    )
+
+    coordinator = Coordinator(
+        planner=planner,
+        executor=ExecutorAgent(tool_registry=tool_registry),
+        reviewer=FakeReviewer(),
+        memory=memory,
+        planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
+        tool_registry=tool_registry,
+        llm_client=llm,
+        router=FakeRouter()
+    )
+
+    user_task = "Create src/main.py with a simple Python hello world program"
+    route = WorkflowPolicyRegistry.build_route({
+        "task_type": "workspace_mutation",
+        "confidence": 1.0,
+        "routing_reason": "test"
+    })
+    planner_input = coordinator.build_planner_input(
+        user_task=user_task,
+        route=route,
+        conversation_id=1,
+        step_index=2
+    )
+
+    assert planner_input["requested_paths"] == ["src/main.py"]
+    assert planner_input["allowed_parent_dirs"] == ["src"]
+
+    msg = coordinator.try_plan(planner_input=planner_input)
+
+    assert msg.status == "completed"
+    assert len(llm.calls) == 2
+
+    retry_prompt = llm.calls[1][-1]["content"]
+    assert "The user explicitly requested src/main.py" in retry_prompt
+    assert "Your plan used hello_world.py" in retry_prompt
+    assert "Regenerate the plan using exactly src/main.py" in retry_prompt
+    assert "The only allowed mutation paths are src and src/main.py" in retry_prompt
+    assert "Do not invent hello_world.py, code.py, main.py, or any other filename" in retry_prompt
+    assert "create only 'src'" in retry_prompt
+
+    steps = msg.response["steps"]
+    assert steps[0]["tool"] == "create_dir"
+    assert steps[0]["args"]["path"] == "src"
+    assert steps[1]["tool"] == "create_file"
+    assert steps[1]["args"]["path"] == "src/main.py"
+
+
+def test_planning_retry_feedback_explains_fake_content_step_string(tmp_path):
+    from src.agents.planning.PlannerAgent import PlannerAgent
+
+    class FakeStepRepairLLM:
+        def __init__(self):
+            self.calls = []
+
+        def invoke_json(self, messages, stream=False, schema=None):
+            self.calls.append(messages)
+
+            if len(self.calls) == 1:
+                return {
+                    "goal": "Create hello world program",
+                    "steps": [
+                        {
+                            "id": 1,
+                            "tool": "create_file",
+                            "args": {
+                                "path": "src/main.py",
+                                "content": "content_step:1"
+                            }
+                        }
+                    ],
+                    "planning_rationale": "Bad fake step string."
+                }
+
+            return {
+                "goal": "Create hello world program at requested path",
+                "steps": [
+                    {
+                        "id": 1,
+                        "tool": "generate_content",
+                        "args": {
+                            "prompt": "Write a simple Python hello world program. Output only Python code."
+                        }
+                    },
+                    {
+                        "id": 2,
+                        "tool": "create_file",
+                        "args": {
+                            "path": "src/main.py",
+                            "content_step": 1
+                        }
+                    }
+                ],
+                "planning_rationale": "Use proper content_step syntax."
+            }
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    workspace = WorkspaceConfig(root=str(workspace_root))
+    llm = FakeStepRepairLLM()
+
+    planner = PlannerAgent(
+        llm_client=llm,
+        workspace_config=workspace
+    )
+    memory = FakeMemory()
+    tool_registry = build_tool_registry(
+        llm_client=llm,
+        workspace=workspace
+    )
+
+    coordinator = Coordinator(
+        planner=planner,
+        executor=ExecutorAgent(tool_registry=tool_registry),
+        reviewer=FakeReviewer(),
+        memory=memory,
+        planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
+        tool_registry=tool_registry,
+        llm_client=llm,
+        router=FakeRouter()
+    )
+
+    route = WorkflowPolicyRegistry.build_route({
+        "task_type": "workspace_mutation",
+        "confidence": 1.0,
+        "routing_reason": "test"
+    })
+    planner_input = coordinator.build_planner_input(
+        user_task="Create src/main.py with a simple Python hello world program",
+        route=route,
+        conversation_id=1,
+        step_index=2
+    )
+
+    msg = coordinator.try_plan(planner_input=planner_input)
+
+    assert msg.status == "completed"
+    assert len(llm.calls) == 2
+
+    retry_prompt = llm.calls[1][-1]["content"]
+    assert "You used {'content': 'content_step'}, which is invalid" in retry_prompt
+    assert "Use {'content_step': 1} instead" in retry_prompt
+
+    steps = msg.response["steps"]
+    assert steps[0]["tool"] == "generate_content"
+    assert steps[1]["args"]["path"] == "src/main.py"
+    assert steps[1]["args"]["content_step"] == 1
+
+
+def test_no_permission_request_until_explicit_path_plan_is_valid(tmp_path):
+    from src.agents.planning.PlannerAgent import PlannerAgent
+
+    class BadThenValidPathLLM:
+        def __init__(self):
+            self.json_calls = []
+
+        def invoke_json(self, messages, stream=False, schema=None):
+            self.json_calls.append(messages)
+
+            if len(self.json_calls) == 1:
+                return {
+                    "goal": "Create hello world program",
+                    "steps": [
+                        {
+                            "id": 1,
+                            "tool": "create_file",
+                            "args": {
+                                "path": "code.py",
+                                "content": "print('hello world')"
+                            }
+                        }
+                    ],
+                    "planning_rationale": "Bad inferred filename."
+                }
+
+            return {
+                "goal": "Create hello world program at requested path",
+                "steps": [
+                    {
+                        "id": 1,
+                        "tool": "generate_content",
+                        "args": {
+                            "prompt": "Write a simple Python hello world program. Output only Python code."
+                        }
+                    },
+                    {
+                        "id": 2,
+                        "tool": "create_file",
+                        "args": {
+                            "path": "src/main.py",
+                            "content_step": 1
+                        }
+                    }
+                ],
+                "planning_rationale": "Use the locked explicit path."
+            }
+
+        def invoke_text(self, messages, stream=False):
+            return "print('hello world')"
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    workspace = WorkspaceConfig(root=str(workspace_root))
+    llm = BadThenValidPathLLM()
+
+    tool_registry = build_tool_registry(
+        llm_client=llm,
+        workspace=workspace
+    )
+
+    coordinator = Coordinator(
+        planner=PlannerAgent(llm_client=llm, workspace_config=workspace),
+        executor=ExecutorAgent(tool_registry=tool_registry),
+        reviewer=FakeReviewer(),
+        memory=FakeMemory(),
+        planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
+        tool_registry=tool_registry,
+        llm_client=llm,
+        router=FakeRouter()
+    )
+
+    message = coordinator.start_workflow(
+        conversation_id=1,
+        user_task="Create src/main.py with a simple Python hello world program"
+    )
+
+    assert message.message_type == "permission_request"
+    assert len(llm.json_calls) == 2
+
+    requested_tools = message.response["requested_tools"]
+    assert len(requested_tools) == 1
+    assert requested_tools[0]["tool"] == "create_file"
+    assert requested_tools[0]["resolved_args"]["path"] == "src/main.py"
+    assert requested_tools[0]["resolved_args"]["content"] == "print('hello world')"
+
+    plan_steps = message.response["plan_response"]["steps"]
+    mutation_paths = [
+        step["args"].get("path")
+        for step in plan_steps
+        if step["tool"] in {"create_dir", "create_file", "write_file", "append_file", "replace_text"}
+    ]
+    assert "code.py" not in mutation_paths
+    assert mutation_paths == ["src/main.py"]
+
+
+def test_execution_verifier_rejects_before_reviewer_acceptance(tmp_path):
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    workspace = WorkspaceConfig(root=str(workspace_root))
+    llm = FakeLLM()
+    tool_registry = build_tool_registry(
+        llm_client=llm,
+        workspace=workspace
+    )
+    reviewer = FakeReviewer()
+    memory = FakeMemory()
+
+    coordinator = Coordinator(
+        planner=FakePlanner(),
+        executor=ExecutorAgent(tool_registry=tool_registry),
+        reviewer=reviewer,
+        memory=memory,
+        planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
+        tool_registry=tool_registry,
+        llm_client=llm,
+        router=FakeRouter(),
+        execution_verifier=ExecutionVerifier(workspace_config=workspace)
+    )
+
+    executor_response = {
+        "goal": "Create work.txt with hello",
+        "approved_actions": [],
+        "rollback_log": [],
+        "workspace_before": [],
+        "step_results": {
+            "1": "File 'work.txt' created successfully."
+        },
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "create_file",
+                "status": "completed",
+                "args": {
+                    "path": "work.txt",
+                    "content": "hello"
+                },
+                "resolved_args": {
+                    "path": "work.txt",
+                    "content": "hello"
+                },
+                "result": "File 'work.txt' created successfully."
+            }
+        ]
+    }
+    executor_msg = Message(
+        conversation_id=1,
+        step_index=4,
+        sender="executor",
+        receiver="coordinator",
+        target_agent=None,
+        message_type="execution_result",
+        status="completed",
+        response=executor_response,
+        visibility="internal"
+    )
+
+    message = coordinator.continue_workflow(
+        conversation_id=1,
+        user_task="create work.txt with hello",
+        plan_response={
+            "goal": "Create work.txt with hello",
+            "steps": [
+                {
+                    "id": 1,
+                    "tool": "create_file",
+                    "args": {
+                        "path": "work.txt",
+                        "content": "hello"
+                    }
+                }
+            ],
+            "route": {"task_type": "workspace_mutation"}
+        },
+        executor_msg=executor_msg,
+        review_retry_used=True
+    )
+
+    assert message.status == "failed"
+    assert message.message_type == "workflow_result"
+    assert any("work.txt" in issue for issue in message.response["issues"])
+    assert reviewer.calls == []

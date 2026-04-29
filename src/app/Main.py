@@ -5,15 +5,16 @@ from pprint import pprint
 
 from src.config.workspace_config import save_workspace_path, load_workspace_path
 
-from src.Agents.Planning.PlannerAgent import PlannerAgent
-from src.Agents.ExecutorAgent import ExecutorAgent
-from src.Agents.MemoryAgent import MemoryAgent
-from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
-from src.Agents.Coordinator import Coordinator
-from src.Agents.Routing.RouteAgent import RouteAgent
+from src.agents.planning.PlannerAgent import PlannerAgent
+from src.agents.execution.ExecutorAgent import ExecutorAgent
+from src.core.workflow.ExecutionVerifier import ExecutionVerifier
+from src.agents.memory.MemoryAgent import MemoryAgent
+from src.agents.reviewing.ReviewerAgent import ReviewerAgent
+from src.core.workflow.Coordinator import Coordinator
+from src.agents.routing.RouteAgent import RouteAgent
 
-from src.OllamaClient import OllamaClient
-from src.Memory.sql_database import DatabaseManager
+from src.llm.OllamaClient import DEFAULT_LLM_LOG_PATH, OllamaClient
+from src.memory.sql_database import DatabaseManager
 from src.tools.tool_registry import build_tool_registry
 from src.tools.tool_description import PLANNER_TOOL_DESCRIPTIONS
 from src.tools.utils import WorkspaceConfig
@@ -21,7 +22,7 @@ from src.tools.utils import WorkspaceConfig
 
 CONVERSATION_ID = 1
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MEMORY_DIR = PROJECT_ROOT / "Memory"
 DB_PATH = MEMORY_DIR / "memory.db"
 VECTOR_DIR = MEMORY_DIR / "chroma_db"
@@ -195,6 +196,57 @@ def show_plans(limit: int = 10):
     print("\n=======================================================")
 
 
+def show_llm_calls(limit: int = 10):
+    print(f"\n========== LAST {limit} RAW LLM CALLS ==========")
+
+    if not DEFAULT_LLM_LOG_PATH.exists():
+        print("No LLM call log found yet.")
+        print("================================================")
+        return
+
+    try:
+        lines = DEFAULT_LLM_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:
+        print(f"Could not read LLM call log: {exc}")
+        print("================================================")
+        return
+
+    entries = []
+    for line in lines[-limit:]:
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            entries.append({"invalid_log_line": line})
+
+    for entry in entries:
+        print("\n------------------------------------------------")
+        print(f"timestamp: {entry.get('timestamp', '')}")
+        print(f"call_id:   {entry.get('call_id', '')}")
+        print(f"type:      {entry.get('call_type', '')}")
+        print(f"model:     {entry.get('model', '')}")
+        print("options:")
+        pprint(entry.get("options", {}))
+        print("messages:")
+        pprint(entry.get("messages", []))
+
+        if "schema" in entry:
+            print("schema:")
+            pprint(entry.get("schema", {}))
+
+        print("raw_response:")
+        pprint(entry.get("raw_response", ""))
+
+        if "parsed_response" in entry:
+            print("parsed_response:")
+            pprint(entry.get("parsed_response", {}))
+
+        if "parse_error" in entry:
+            print("parse_error:")
+            pprint(entry.get("parse_error", ""))
+
+    print("\n================================================")
+
+
 def show_memory(memory_agent: MemoryAgent, limit: int = 20):
     print("\n========== STORED VECTOR MEMORIES ==========")
 
@@ -297,6 +349,7 @@ def build_system():
 
     planner = PlannerAgent(llm_client=llm_client, workspace_config=workspace)
     executor = ExecutorAgent(tool_registry=tool_registry)
+    execution_verifier = ExecutionVerifier(workspace_config=workspace)
     reviewer = ReviewerAgent(llm_client=llm_client, workspace_config=workspace)
     memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
     router = RouteAgent(llm_client=llm_client)
@@ -309,7 +362,8 @@ def build_system():
         planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
         tool_registry=tool_registry,
         llm_client=llm_client,
-        router = router
+        router = router,
+        execution_verifier=execution_verifier
     )
 
     debug_print("BabyClaw system built successfully")
@@ -374,6 +428,12 @@ def print_help():
 
             show plans <number>
                 Show the last <number> planner outputs.
+
+            show llm
+                Show the last 10 raw LLM calls, including prompts and raw model responses.
+
+            show llm <number>
+                Show the last <number> raw LLM calls.
 
             show memory
                 Show all long-term vector memories and the last 20 SQL messages.
@@ -471,6 +531,20 @@ def handle_view_command(user_input: str, workspace: WorkspaceConfig, memory_agen
                 return True
 
         show_plans(limit=limit)
+        return True
+
+    if command.startswith("show llm"):
+        parts = command.split()
+        limit = 10
+
+        if len(parts) == 3:
+            try:
+                limit = int(parts[2])
+            except ValueError:
+                print("System: Please use a number, for example: show llm 20")
+                return True
+
+        show_llm_calls(limit=limit)
         return True
 
     if command.startswith("show memory"):

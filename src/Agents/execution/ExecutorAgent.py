@@ -1,5 +1,5 @@
-from src.Agents.BaseAgent import Agent
-from src.message import Message 
+from src.agents.BaseAgent import Agent
+from src.core.message import Message 
 from typing import Any
 
 class ExecutorAgent(Agent):
@@ -15,7 +15,7 @@ class ExecutorAgent(Agent):
             "copy_path"
     }
     
-    def __init__(self, tool_registry: dict):
+    def __init__(self, tool_registry: dict, **_):
         super().__init__("executor")
         self.tool_registry = tool_registry #setting as an instance field so that sets of tools can be exchanged depending on what user enables, i.e. coord sets it
 
@@ -41,7 +41,8 @@ class ExecutorAgent(Agent):
             "recent_messages": recent_messages or [], #Depending on whether it is falsy or not
             "user_task": user_task, #pinned literal user task; executor injects it into LLM prompts to stop the planner from drifting
             "workspace_before": plan_response.get("workspace_before", []),
-             "route": route,
+            "workflow_iteration": plan_response.get("workflow_iteration", 1),
+            "route": route,
             "allowed_tools": set(route.get("allowed_tools", [])),
             "allow_mutations": bool(route.get("allow_mutations", False))
         }
@@ -129,6 +130,7 @@ class ExecutorAgent(Agent):
                 completed_ids.append(step["id"])
 
                 execution_trace.append({
+                    "workflow_iteration": execution_state.get("workflow_iteration", 1),
                     "id": step["id"],
                     "tool": step["tool"],
                     "args": step.get("args", {}),
@@ -142,6 +144,7 @@ class ExecutorAgent(Agent):
                 step_status[step["id"]] = "failed"
 
                 execution_trace.append({
+                    "workflow_iteration": execution_state.get("workflow_iteration", 1),
                     "id": step["id"],
                     "tool": step["tool"],
                     "args": step.get("args", {}),
@@ -279,7 +282,10 @@ class ExecutorAgent(Agent):
             it is entirely complete, not yet complete or something failed
         '''
         try:
-            updated_execution_state = self.execute_tools(execution_state=execution_state, runnable_steps=runnable_steps)
+            updated_execution_state = self.execute_tools(
+                execution_state=execution_state,
+                runnable_steps=runnable_steps
+            )
             if self.is_execution_complete(updated_execution_state):
                 execution_response = self.build_execution_result(updated_execution_state)
                 target_agent = "reviewer"

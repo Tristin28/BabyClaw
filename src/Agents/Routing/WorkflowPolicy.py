@@ -59,7 +59,7 @@ class WorkflowPolicyRegistry:
         "direct_response": WorkflowPolicy(
             task_type="direct_response",
             tool_group="direct_response_tools",
-            memory_mode="pinned_only",
+            memory_mode="none",
             use_recent_messages=False,
             use_workspace=False,
             allow_mutations=False

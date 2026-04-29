@@ -1,7 +1,7 @@
 '''
     This file will consist of tools which make use of the llm in order to retrieve a result
 '''
-from src.OllamaClient import OllamaClient
+from src.llm.OllamaClient import OllamaClient
 from typing import Callable #represents function objects (in this case as it can actually represent any object which can be called via ())
 
 def create_summarise_txt_func(llm: OllamaClient) -> Callable[[str], str]:

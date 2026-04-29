@@ -1,6 +1,6 @@
 import json
 
-from src.Agents.Reviewing.ReviewerAgent import ReviewerAgent
+from src.agents.reviewing.ReviewerAgent import ReviewerAgent
 from src.tools.utils import WorkspaceConfig
 
 
@@ -208,6 +208,90 @@ def test_reviewer_rejects_failed_tool_step():
     assert any("failed" in issue.lower() for issue in msg.response["issues"])
 
 
+def test_reviewer_accepts_valid_direct_response_without_llm_overreview():
+    class RejectingReviewerLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            raise AssertionError("Direct response review should not call the LLM reviewer")
+
+    reviewer = ReviewerAgent(llm_client=RejectingReviewerLLM())
+
+    execution_response = {
+        "goal": "direct_response",
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "direct_response",
+                "status": "completed",
+                "args": {"prompt": "Write a message to my friend Jake and ask how he is"},
+                "resolved_args": {"prompt": "Write a message to my friend Jake and ask how he is"},
+                "result": "Hi Jake,\n\nHow are you doing? Hope you're well.\n\nTristin"
+            }
+        ]
+    }
+
+    msg = reviewer.run(
+        conversation_id=1,
+        step_index=3,
+        user_task="Write a message to my friend Jake and ask how he is",
+        execution_response=execution_response,
+        workspace_before=["poem.txt"],
+        workspace_after=["poem.txt"],
+        route={
+            "task_type": "contextual_followup",
+            "tool_group": "direct_response_tools",
+            "use_workspace": False,
+            "allow_mutations": False,
+            "allowed_tools": ["direct_response"],
+        }
+    )
+
+    assert msg.status == "completed"
+    assert msg.response["accepted"] is True
+    assert msg.response["issues"] == []
+
+
+def test_reviewer_rejects_failed_direct_response_without_llm_overreview():
+    class RejectingReviewerLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            raise AssertionError("Direct response review should not call the LLM reviewer")
+
+    reviewer = ReviewerAgent(llm_client=RejectingReviewerLLM())
+
+    execution_response = {
+        "goal": "direct_response",
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "direct_response",
+                "status": "failed",
+                "args": {"prompt": "Write a message to my friend Jake and ask how he is"},
+                "resolved_args": {"prompt": "Write a message to my friend Jake and ask how he is"},
+                "error": "LLM failed"
+            }
+        ]
+    }
+
+    msg = reviewer.run(
+        conversation_id=1,
+        step_index=3,
+        user_task="Write a message to my friend Jake and ask how he is",
+        execution_response=execution_response,
+        workspace_before=[],
+        workspace_after=[],
+        route={
+            "task_type": "contextual_followup",
+            "tool_group": "direct_response_tools",
+            "use_workspace": False,
+            "allow_mutations": False,
+            "allowed_tools": ["direct_response"],
+        }
+    )
+
+    assert msg.status == "completed"
+    assert msg.response["accepted"] is False
+    assert any("complete successfully" in issue for issue in msg.response["issues"])
+
+
 class SemanticReviewerLLM:
     def invoke_json(self, messages, stream=False, schema=None):
         user_message = messages[-1]["content"]
@@ -314,6 +398,175 @@ def test_reviewer_accepts_hello_world_when_requested(tmp_path):
         execution_response=execution_response,
         workspace_before=[],
         workspace_after=["hello.py"]
+    )
+
+    assert msg.status == "completed"
+    assert msg.response["accepted"] is True
+    assert msg.response["issues"] == []
+
+
+def test_reviewer_rejects_written_file_when_proper_noun_topic_is_missing(tmp_path):
+    class RejectingReviewerLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            raise AssertionError("Deterministic topic check should reject before the LLM reviewer")
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    target_file = workspace_root / "poem.txt"
+    target_file.write_text(
+        "# A Simple Poem\n\n"
+        "In a meadow where flowers bloom,\n"
+        "A butterfly dances, free and bold...\n",
+        encoding="utf-8"
+    )
+
+    reviewer = ReviewerAgent(
+        llm_client=RejectingReviewerLLM(),
+        workspace_config=WorkspaceConfig(root=str(workspace_root))
+    )
+
+    execution_response = {
+        "goal": "Write a poem about Malta into poem.txt",
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "write_file",
+                "status": "completed",
+                "args": {"path": "poem.txt", "content": target_file.read_text(encoding="utf-8")},
+                "resolved_args": {"path": "poem.txt", "content": target_file.read_text(encoding="utf-8")},
+                "result": "File 'poem.txt' written successfully."
+            }
+        ]
+    }
+
+    msg = reviewer.run(
+        conversation_id=1,
+        step_index=3,
+        user_task="Write a poem about Malta into poem.txt",
+        execution_response=execution_response,
+        workspace_before=[],
+        workspace_after=["poem.txt"],
+        route={
+            "task_type": "workspace_mutation",
+            "tool_group": "mutation_file_tools",
+            "use_workspace": True,
+            "allow_mutations": True,
+            "allowed_tools": ["write_file"],
+        }
+    )
+
+    assert msg.status == "completed"
+    assert msg.response["accepted"] is False
+    assert msg.response["issues"] == [
+        "The file was written, but the content does not match the requested topic 'Malta'."
+    ]
+
+
+def test_reviewer_allows_written_file_when_proper_noun_topic_is_present(tmp_path):
+    class AcceptingReviewerLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            return {
+                "accepted": True,
+                "review_summary": "The file content matches the requested topic.",
+                "issues": []
+            }
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    target_file = workspace_root / "poem.txt"
+    target_file.write_text(
+        "Malta wakes where honeyed limestone glows,\n"
+        "And waves remember every harbour light.\n",
+        encoding="utf-8"
+    )
+
+    reviewer = ReviewerAgent(
+        llm_client=AcceptingReviewerLLM(),
+        workspace_config=WorkspaceConfig(root=str(workspace_root))
+    )
+
+    execution_response = {
+        "goal": "Write a poem about Malta into poem.txt",
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "write_file",
+                "status": "completed",
+                "args": {"path": "poem.txt", "content": target_file.read_text(encoding="utf-8")},
+                "resolved_args": {"path": "poem.txt", "content": target_file.read_text(encoding="utf-8")},
+                "result": "File 'poem.txt' written successfully."
+            }
+        ]
+    }
+
+    msg = reviewer.run(
+        conversation_id=1,
+        step_index=3,
+        user_task="Write a poem about Malta into poem.txt",
+        execution_response=execution_response,
+        workspace_before=[],
+        workspace_after=["poem.txt"],
+        route={
+            "task_type": "workspace_mutation",
+            "tool_group": "mutation_file_tools",
+            "use_workspace": True,
+            "allow_mutations": True,
+            "allowed_tools": ["write_file"],
+        }
+    )
+
+    assert msg.status == "completed"
+    assert msg.response["accepted"] is True
+    assert msg.response["issues"] == []
+
+
+def test_reviewer_accepts_exact_hello_world_written_to_file(tmp_path):
+    class AcceptingReviewerLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            return {
+                "accepted": True,
+                "review_summary": "The exact requested content was written.",
+                "issues": []
+            }
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    target_file = workspace_root / "hello.txt"
+    target_file.write_text("hello world", encoding="utf-8")
+
+    reviewer = ReviewerAgent(
+        llm_client=AcceptingReviewerLLM(),
+        workspace_config=WorkspaceConfig(root=str(workspace_root))
+    )
+
+    execution_response = {
+        "goal": "Write hello world into hello.txt",
+        "execution_trace": [
+            {
+                "id": 1,
+                "tool": "write_file",
+                "status": "completed",
+                "args": {"path": "hello.txt", "content": "hello world"},
+                "resolved_args": {"path": "hello.txt", "content": "hello world"},
+                "result": "File 'hello.txt' written successfully."
+            }
+        ]
+    }
+
+    msg = reviewer.run(
+        conversation_id=1,
+        step_index=3,
+        user_task="Write hello world into hello.txt",
+        execution_response=execution_response,
+        workspace_before=[],
+        workspace_after=["hello.txt"],
+        route={
+            "task_type": "workspace_mutation",
+            "tool_group": "mutation_file_tools",
+            "use_workspace": True,
+            "allow_mutations": True,
+            "allowed_tools": ["write_file"],
+        }
     )
 
     assert msg.status == "completed"

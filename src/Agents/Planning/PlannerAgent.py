@@ -1,8 +1,8 @@
-from src.OllamaClient import OllamaClient
-from src.Agents.BaseAgent import Agent
-from src.message import Message
-from src.Agents.Planning.PlanCompiler import PlanCompiler
-from src.Agents.Planning.PlannerPrompt import PLANNER_SYSTEM_PROMPT
+from src.llm.OllamaClient import OllamaClient
+from src.agents.BaseAgent import Agent
+from src.core.message import Message
+from src.agents.planning.PlanCompiler import PlanCompiler
+from src.agents.planning.PlannerPrompt import PLANNER_SYSTEM_PROMPT
 from src.tools.utils import WorkspaceConfig
 
 class PlannerAgent(Agent):
@@ -39,6 +39,21 @@ class PlannerAgent(Agent):
 
         if planner_input["context"]:
             sections.append(f"Relevant memory:\n{planner_input['context']}")
+
+        requested_paths = planner_input.get("requested_paths") or []
+        allowed_parent_dirs = planner_input.get("allowed_parent_dirs") or []
+
+        if requested_paths:
+            sections.append(
+                "HARD USER CONSTRAINTS:\n"
+                f"requested_paths = {requested_paths}\n"
+                f"allowed_parent_dirs = {allowed_parent_dirs}\n\n"
+                "Rules:\n"
+                "- You must use these exact requested paths for file mutations.\n"
+                "- You may only create parent directories listed in allowed_parent_dirs.\n"
+                "- Do not infer, rename, simplify, or replace requested paths.\n"
+                "- Do not use code.py, hello_world.py, main.py, output.py, or any other filename."
+            )
 
         sections.append(f"Available tools:\n{planner_input['tools']}")
 
@@ -113,7 +128,12 @@ class PlannerAgent(Agent):
             schema = self.build_schema(planner_input["tools"])
             raw_response = self.llm_client.invoke_json(messages,stream=False,schema=schema)
 
-            compiler = PlanCompiler(available_tools=planner_input["tools"], workspace_config=self.workspace_config, route=planner_input.get("route", {}))
+            compiler = PlanCompiler(
+                available_tools=planner_input["tools"],
+                workspace_config=self.workspace_config,
+                route=planner_input.get("route", {}),
+                user_task=planner_input["task"]
+            )
             response = compiler.compile(raw_response)
 
             status = 'completed'

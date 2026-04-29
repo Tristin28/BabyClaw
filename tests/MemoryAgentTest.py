@@ -1,7 +1,7 @@
 from pathlib import Path
-from src.Memory.sql_database import DatabaseManager
-from src.Agents.MemoryAgent import MemoryAgent
-from src.message import Message
+from src.memory.sql_database import DatabaseManager
+from src.agents.memory.MemoryAgent import MemoryAgent
+from src.core.message import Message
 
 
 def main():

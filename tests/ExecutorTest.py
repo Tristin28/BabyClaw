@@ -1,5 +1,5 @@
-from src.Agents.ExecutorAgent import ExecutorAgent
-from src.OllamaClient import OllamaClient
+from src.agents.execution.ExecutorAgent import ExecutorAgent
+from src.llm.OllamaClient import OllamaClient
 import copy 
 
 #Method which will handle redundant test logic

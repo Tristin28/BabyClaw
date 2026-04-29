@@ -1,6 +1,6 @@
-from src.Memory.sql_database import DatabaseManager
+from src.memory.sql_database import DatabaseManager
 import json 
-from src.message import Message
+from src.core.message import Message
 from datetime import datetime
 from pathlib import Path
 

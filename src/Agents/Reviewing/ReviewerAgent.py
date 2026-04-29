@@ -1,8 +1,9 @@
-from src.Agents.BaseAgent import Agent
-from src.OllamaClient import OllamaClient
-from src.message import Message
-from src.Agents.Reviewing.ReviewPrompt import REVIEWER_SYSTEM_PROMPT
+from src.agents.BaseAgent import Agent
+from src.llm.OllamaClient import OllamaClient
+from src.core.message import Message
+from src.agents.reviewing.ReviewPrompt import REVIEWER_SYSTEM_PROMPT
 import json 
+import re
 
 
 class ReviewerAgent(Agent):
@@ -332,6 +333,168 @@ class ReviewerAgent(Agent):
                                 "workspace path change, and no content-changing tool was executed.")
 
         return issues
+
+    def extract_about_topic(self, user_task: str) -> str | None:
+        if not isinstance(user_task, str):
+            return None
+
+        match = re.search(
+            r"\babout\s+([A-Z][A-Za-z0-9_-]*(?:\s+[A-Z][A-Za-z0-9_-]*)*)",
+            user_task
+        )
+
+        if not match:
+            return None
+
+        topic = match.group(1).strip(" .,!?:;\"'")
+        return topic or None
+
+    def extract_exact_written_text(self, user_task: str) -> str | None:
+        if not isinstance(user_task, str):
+            return None
+
+        patterns = [
+            r"\bwrite\s+(.+?)\s+(?:into|to|in)\s+[\w./ -]+\.[A-Za-z0-9]{1,12}\b",
+            r"\bcreate\s+[\w./ -]+\.[A-Za-z0-9]{1,12}\s+with\s+(.+)$",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, user_task, flags=re.IGNORECASE)
+            if match:
+                text = match.group(1).strip(" .,!?:;\"'")
+
+                if not text:
+                    continue
+
+                lowered_text = text.lower()
+
+                if " about " in f" {lowered_text} ":
+                    continue
+
+                if lowered_text.startswith(("a poem", "an poem", "poem", "a story", "short story", "a letter", "an email")):
+                    continue
+
+                return text
+
+        return None
+
+    def collect_available_final_file_contents(self, review_evidence: dict) -> list[dict]:
+        final_contents = []
+
+        for step in review_evidence.get("steps", []):
+            final_content = step.get("final_content", {})
+
+            if not isinstance(final_content, dict):
+                continue
+
+            if not final_content.get("available"):
+                continue
+
+            content = final_content.get("content", "")
+            path = final_content.get("path", "")
+
+            if isinstance(content, str):
+                final_contents.append({
+                    "path": path,
+                    "content": content
+                })
+
+        return final_contents
+
+    def deterministic_content_checks(self, user_task: str, review_evidence: dict) -> list[str]:
+        issues = []
+        final_contents = self.collect_available_final_file_contents(review_evidence=review_evidence)
+
+        if not final_contents:
+            return issues
+
+        topic = self.extract_about_topic(user_task)
+
+        if topic:
+            topic_pattern = re.compile(rf"\b{re.escape(topic)}\b", flags=re.IGNORECASE)
+
+            for item in final_contents:
+                if not topic_pattern.search(item["content"]):
+                    issues.append(
+                        f"The file was written, but the content does not match the requested topic '{topic}'."
+                    )
+
+        exact_text = self.extract_exact_written_text(user_task)
+
+        if exact_text:
+            exact_pattern = re.compile(re.escape(exact_text), flags=re.IGNORECASE)
+
+            for item in final_contents:
+                if not exact_pattern.search(item["content"]):
+                    issues.append(
+                        f"The file was written, but the content does not contain the requested text '{exact_text}'."
+                    )
+
+        return issues
+
+    def deterministic_direct_response_review(self, review_evidence: dict) -> dict | None:
+        """
+            Deterministically accept or reject simple chat-only responses.
+
+            The LLM reviewer is useful for semantic file/content checks, but it can
+            overthink short drafting tasks. For direct_response routes the contract is
+            intentionally small: exactly one successful direct_response step, a
+            non-empty answer, and no workspace mutations.
+        """
+        route_scope = review_evidence.get("route_scope", {})
+        steps = review_evidence.get("steps", [])
+        task_type = route_scope.get("task_type")
+        tool_group = route_scope.get("tool_group")
+
+        is_direct_response_route = (
+            task_type in {"direct_response", "memory_question", "contextual_followup"}
+            or tool_group == "direct_response_tools"
+        )
+
+        if not is_direct_response_route:
+            return None
+
+        if not steps:
+            return {
+                "accepted": False,
+                "review_summary": "The direct response task did not run any steps.",
+                "issues": ["No direct_response step was executed."]
+            }
+
+        failed_steps = [step for step in steps if step.get("status") != "completed"]
+        if failed_steps:
+            failed_ids = ", ".join(str(step.get("id")) for step in failed_steps)
+            return {
+                "accepted": False,
+                "review_summary": "One or more direct response steps failed.",
+                "issues": [f"Step(s) {failed_ids} did not complete successfully."]
+            }
+
+        unexpected_tools = [
+            step.get("tool")
+            for step in steps
+            if step.get("tool") != "direct_response"
+        ]
+        if unexpected_tools:
+            return {
+                "accepted": False,
+                "review_summary": "The direct response task used tools outside the chat-only route.",
+                "issues": [f"Unexpected tool(s) used for direct response: {', '.join(unexpected_tools)}."]
+            }
+
+        final_result = steps[-1].get("result")
+        if not isinstance(final_result, str) or final_result.strip() == "":
+            return {
+                "accepted": False,
+                "review_summary": "The direct response task produced no user-facing answer.",
+                "issues": ["The direct_response result is empty."]
+            }
+
+        return {
+            "accepted": True,
+            "review_summary": "The direct response completed with a non-empty chat answer.",
+            "issues": []
+        }
     
     def run(self, conversation_id: int, step_index: int, user_task: str, execution_response: dict, workspace_before: list = None, workspace_after: list = None,
             route: dict = None) -> Message:
@@ -350,9 +513,23 @@ class ReviewerAgent(Agent):
                     "issues": deterministic_issues
                 }
             else:
-                messages = self.build_messages(user_task=user_task, review_evidence=review_evidence)
-                review_response = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
-                self.validate_llm_response(review_response)
+                content_issues = self.deterministic_content_checks(user_task=user_task, review_evidence=review_evidence)
+
+                if content_issues:
+                    review_response = {
+                        "accepted": False,
+                        "review_summary": "Deterministic reviewer checks found file content problems.",
+                        "issues": content_issues
+                    }
+                else:
+                    direct_response_review = self.deterministic_direct_response_review(review_evidence=review_evidence)
+
+                    if direct_response_review is not None:
+                        review_response = direct_response_review
+                    else:
+                        messages = self.build_messages(user_task=user_task, review_evidence=review_evidence)
+                        review_response = self.llm_client.invoke_json(messages=messages, stream=False, schema=self.SCHEMA)
+                        self.validate_llm_response(review_response)
 
             status = "completed"
             target_agent = None

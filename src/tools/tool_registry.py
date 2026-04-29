@@ -1,5 +1,5 @@
 from typing import Any, Callable
-from src.OllamaClient import OllamaClient
+from src.llm.OllamaClient import OllamaClient
 from src.tools.file_tools import read_file, list_dir, find_file, create_file, write_file, append_file, rollback_file_snapshot, snapshot_file, delete_file, search_text, replace_text
 from src.tools.file_tools import list_tree, find_file_recursive, create_dir, delete_dir, move_path, copy_path, snapshot_path, rollback_path_snapshot, snapshot_many_paths, rollback_many_path_snapshots
 from src.tools.llm_tools import create_summarise_txt_func, direct_response, generate_content
@@ -210,7 +210,7 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
             },
             requires_permission=True,
             permission_identity_args=["source_path", "destination_path"],
-            rollback_snapshot=lambda source_path, destination_path: snapshot_path(workspace, destination_path),
+            rollback_snapshot=lambda _, destination_path: snapshot_path(workspace, destination_path),
             rollback_apply=lambda snapshot: rollback_path_snapshot(workspace, snapshot)
         ),
 

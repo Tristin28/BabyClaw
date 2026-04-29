@@ -1,4 +1,6 @@
 from pathlib import Path
+from pathlib import PurePosixPath
+import re
 from src.tools.utils import WorkspaceConfig
 
 class PlanCompiler:
@@ -13,7 +15,21 @@ class PlanCompiler:
         "args": dict,
     }
 
-    def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None, route: dict = None):
+    MUTATION_TOOLS = {
+        "create_file",
+        "write_file",
+        "append_file",
+        "delete_file",
+        "replace_text",
+        "create_dir",
+        "delete_dir",
+        "move_path",
+        "copy_path",
+    }
+
+    MUTATION_PATH_ARGS = {"path", "source_path", "destination_path", "directory"}
+
+    def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None, route: dict = None, user_task: str = ""):
         """
         available_tools should be the same planner-facing tool descriptions
         given to the PlannerAgent.
@@ -25,6 +41,7 @@ class PlanCompiler:
         self.available_tools = available_tools
         self.workspace_config = workspace_config
         self.route = route
+        self.user_task = user_task or ""
 
         self.tool_names = {
             tool["name"]
@@ -56,10 +73,6 @@ class PlanCompiler:
         if self.workspace_config is None:
             return
 
-        path_like_arg_names = {"path", "source_path", "destination_path", "directory",}
-
-        mutating_tools = {"create_file", "write_file", "append_file", "delete_file", "replace_text", "create_dir", "delete_dir", "move_path", "copy_path",}
-
         for step in steps:
             step_id = step["id"]
             tool_name = step["tool"]
@@ -69,7 +82,7 @@ class PlanCompiler:
                 if arg_name.endswith("_step"):
                     continue
 
-                if arg_name not in path_like_arg_names:
+                if arg_name not in self.MUTATION_PATH_ARGS:
                     continue
 
                 if not isinstance(arg_value, str):
@@ -95,7 +108,7 @@ class PlanCompiler:
                         f"must be a relative workspace path, got '{arg_value}'."
                     )
 
-                if tool_name in mutating_tools and cleaned_value in {".", "./"}:
+                if tool_name in self.MUTATION_TOOLS and cleaned_value in {".", "./"}:
                     raise ValueError(
                         f"Step {step_id} tool '{tool_name}' arg '{arg_name}' "
                         f"cannot target the workspace root directly."
@@ -109,6 +122,115 @@ class PlanCompiler:
                         f"resolves outside the workspace or is unsafe: '{arg_value}'. "
                         f"Reason: {e}"
                     )
+
+    def normalise_relative_path_text(self, path_text: str) -> str:
+        cleaned = path_text.strip().strip("\"'`.,;:!?)]}")
+        cleaned = cleaned.replace("\\", "/")
+
+        while cleaned.startswith("./"):
+            cleaned = cleaned[2:]
+
+        parts = []
+        for part in cleaned.split("/"):
+            if part in {"", "."}:
+                continue
+            parts.append(part)
+
+        return "/".join(parts)
+
+    def extract_explicit_file_paths(self, user_task: str) -> list[str]:
+        """
+            Extract explicit file paths from the user task.
+
+            This intentionally looks for file-like paths with an extension, including
+            quoted names containing spaces. It does not infer generic directories.
+        """
+        if not isinstance(user_task, str) or user_task.strip() == "":
+            return []
+
+        explicit_paths = []
+        seen = set()
+
+        quoted_pattern = re.compile(r'["\']([^"\']*\.[A-Za-z0-9]{1,12})["\']')
+        unquoted_pattern = re.compile(
+            r"(?<![\w./-])"
+            r"([A-Za-z0-9_./-]*[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,12})"
+            r"(?![\w./-])"
+        )
+
+        for pattern in (quoted_pattern, unquoted_pattern):
+            for match in pattern.finditer(user_task):
+                candidate = self.normalise_relative_path_text(match.group(1))
+
+                if not candidate:
+                    continue
+
+                if candidate.startswith("/") or candidate.startswith("../") or "/../" in candidate:
+                    continue
+
+                if candidate not in seen:
+                    explicit_paths.append(candidate)
+                    seen.add(candidate)
+
+        return explicit_paths
+
+    def allowed_paths_for_requested_files(self, requested_paths: list[str]) -> set[str]:
+        allowed_paths = set()
+
+        for requested_path in requested_paths:
+            allowed_paths.add(requested_path)
+            parent = PurePosixPath(requested_path).parent
+
+            if str(parent) == ".":
+                continue
+
+            current_parts = []
+            for part in parent.parts:
+                current_parts.append(part)
+                allowed_paths.add("/".join(current_parts))
+
+        return allowed_paths
+
+    def collect_planned_mutation_paths(self, steps: list[dict]) -> list[str]:
+        planned_paths = []
+
+        for step in steps:
+            if step.get("tool") not in self.MUTATION_TOOLS:
+                continue
+
+            for arg_name, arg_value in step.get("args", {}).items():
+                if arg_name.endswith("_step"):
+                    continue
+
+                if arg_name not in self.MUTATION_PATH_ARGS:
+                    continue
+
+                if not isinstance(arg_value, str):
+                    continue
+
+                planned_path = self.normalise_relative_path_text(arg_value)
+                if planned_path:
+                    planned_paths.append(planned_path)
+
+        return planned_paths
+
+    def validate_explicit_mutation_paths(self, steps: list[dict]) -> None:
+        requested_paths = self.extract_explicit_file_paths(self.user_task)
+
+        if not requested_paths:
+            return
+
+        allowed_paths = self.allowed_paths_for_requested_files(requested_paths)
+        requested_path_text = requested_paths[0] if len(requested_paths) == 1 else ", ".join(requested_paths)
+
+        for planned_path in self.collect_planned_mutation_paths(steps):
+            if planned_path in allowed_paths:
+                continue
+
+            raise ValueError(
+                f"Plan rejected: planned mutation path '{planned_path}' "
+                f"does not match requested path '{requested_path_text}'."
+            )
                 
     def apply_safe_defaults(self, steps: list[dict]) -> list[dict]:
         '''
@@ -202,6 +324,49 @@ class PlanCompiler:
                 args[f"{arg_name}_step"] = candidate_id
 
             step["args"] = args
+
+    def repair_bare_step_marker_args(self, steps: list[dict]) -> None:
+        """
+            Repair the narrow safe case where the planner writes:
+            {"content": "content_step"}
+            instead of:
+            {"content_step": <previous_generate_content_step_id>}
+        """
+        for step in steps:
+            step_id = step["id"]
+            tool_name = step["tool"]
+            args = step.get("args", {})
+            args_schema = self.tool_args_schema.get(tool_name, {})
+
+            for arg_name, arg_value in list(args.items()):
+                if not isinstance(arg_value, str):
+                    continue
+
+                bare_step_arg = f"{arg_name}_step"
+
+                if arg_value.strip() != bare_step_arg:
+                    continue
+
+                arg_def = args_schema.get(arg_name)
+                if not arg_def or not arg_def.get("step_chainable"):
+                    continue
+
+                if arg_name != "content":
+                    continue
+
+                candidate_ids = [
+                    earlier["id"]
+                    for earlier in steps
+                    if earlier["id"] < step_id and earlier["tool"] == "generate_content"
+                ]
+
+                if len(candidate_ids) != 1:
+                    continue
+
+                del args[arg_name]
+                args[bare_step_arg] = candidate_ids[0]
+
+            step["args"] = args
                     
     def compile(self, raw_plan: dict) -> dict:
         self.validate_top_level_schema(raw_plan)
@@ -212,10 +377,12 @@ class PlanCompiler:
 
         normalised_steps = self.apply_safe_defaults(normalised_steps)
         self.repair_placeholder_chains(normalised_steps)
+        self.repair_bare_step_marker_args(normalised_steps)
         self.reject_fake_step_strings(normalised_steps)
 
         self.validate_step_args_are_allowed(normalised_steps)
         self.validate_workspace_paths(normalised_steps)
+        self.validate_explicit_mutation_paths(normalised_steps)
         self.validate_required_args_present(normalised_steps)
 
         normalised_steps = self.infer_dependencies_from_step_args(normalised_steps)

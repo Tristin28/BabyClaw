@@ -400,6 +400,7 @@
         <div class="tabs">
             <button data-tab="chat" class="active">Chat</button>
             <button data-tab="plans">Plans</button>
+            <button data-tab="llm">LLM Calls</button>
             <button data-tab="memory">Memory</button>
             <button data-tab="settings">Settings</button>
         </div>
@@ -415,6 +416,17 @@
                 <h2>Recent planner outputs</h2>
             </div>
             <div id="plans-list"></div>
+        </div>
+
+        <div id="tab-llm" class="tab-pane">
+            <div class="pane-toolbar">
+                <h2>Raw LLM calls</h2>
+            </div>
+            <div class="settings-row" style="margin-bottom:12px;">
+                <span class="label">Log file</span>
+                <span class="value" id="llm-log-path">-</span>
+            </div>
+            <div id="llm-list"></div>
         </div>
 
         <div id="tab-memory" class="tab-pane">
@@ -824,6 +836,98 @@
             }
         }
 
+        function renderLlmCalls(data) {
+            const list = document.getElementById("llm-list");
+            const pathEl = document.getElementById("llm-log-path");
+
+            list.innerHTML = "";
+            pathEl.textContent = data.log_path || "-";
+
+            const calls = data.llm_calls || [];
+            if (!calls.length) {
+                list.innerHTML = '<div class="empty">No raw LLM calls logged yet. Send a task in the Chat tab.</div>';
+                return;
+            }
+
+            for (const call of calls.slice().reverse()) {
+                const card = document.createElement("div");
+                card.className = "card";
+
+                const meta = document.createElement("div");
+                meta.className = "card-meta";
+                const typeBadge = `<span class="badge">${escapeHtml(call.call_type || "")}</span>`;
+                const modelBadge = call.model ? `<span class="badge">${escapeHtml(call.model)}</span>` : "";
+                meta.innerHTML = `${escapeHtml(call.timestamp || "")} ${typeBadge} ${modelBadge}`;
+                card.appendChild(meta);
+
+                const title = document.createElement("div");
+                title.className = "card-title";
+                title.textContent = call.call_id ? `Call ${call.call_id}` : "LLM call";
+                card.appendChild(title);
+
+                const options = document.createElement("pre");
+                options.textContent = JSON.stringify({
+                    stream: call.stream,
+                    options: call.options || {},
+                }, null, 2);
+                card.appendChild(options);
+
+                const messagesTitle = document.createElement("div");
+                messagesTitle.className = "card-title";
+                messagesTitle.style.marginTop = "10px";
+                messagesTitle.textContent = "Messages sent";
+                card.appendChild(messagesTitle);
+
+                const messages = document.createElement("pre");
+                messages.textContent = JSON.stringify(call.messages || [], null, 2);
+                card.appendChild(messages);
+
+                if (call.schema) {
+                    const schemaTitle = document.createElement("div");
+                    schemaTitle.className = "card-title";
+                    schemaTitle.style.marginTop = "10px";
+                    schemaTitle.textContent = "Schema";
+                    card.appendChild(schemaTitle);
+
+                    const schema = document.createElement("pre");
+                    schema.textContent = JSON.stringify(call.schema, null, 2);
+                    card.appendChild(schema);
+                }
+
+                const rawTitle = document.createElement("div");
+                rawTitle.className = "card-title";
+                rawTitle.style.marginTop = "10px";
+                rawTitle.textContent = "Raw response";
+                card.appendChild(rawTitle);
+
+                const raw = document.createElement("pre");
+                raw.textContent = call.raw_response || "";
+                card.appendChild(raw);
+
+                if (call.parsed_response) {
+                    const parsedTitle = document.createElement("div");
+                    parsedTitle.className = "card-title";
+                    parsedTitle.style.marginTop = "10px";
+                    parsedTitle.textContent = "Parsed response";
+                    card.appendChild(parsedTitle);
+
+                    const parsed = document.createElement("pre");
+                    parsed.textContent = JSON.stringify(call.parsed_response, null, 2);
+                    card.appendChild(parsed);
+                }
+
+                if (call.parse_error) {
+                    const err = document.createElement("div");
+                    err.style.color = "var(--error)";
+                    err.style.marginTop = "10px";
+                    err.textContent = "Parse error: " + call.parse_error;
+                    card.appendChild(err);
+                }
+
+                list.appendChild(card);
+            }
+        }
+
         async function refreshPlans() {
             try {
                 const res = await fetch("/api/plans");
@@ -844,6 +948,16 @@
             }
         }
 
+        async function refreshLlmCalls() {
+            try {
+                const res = await fetch("/api/llm-calls?limit=50");
+                const data = await res.json();
+                renderLlmCalls(data);
+            } catch (err) {
+                showToast("Could not load LLM calls.", true);
+            }
+        }
+
         function switchTab(name) {
             for (const btn of document.querySelectorAll(".tabs button")) {
                 btn.classList.toggle("active", btn.dataset.tab === name);
@@ -853,6 +967,7 @@
             }
 
             if (name === "plans") refreshPlans();
+            if (name === "llm") refreshLlmCalls();
             if (name === "memory") refreshMemory();
             if (name === "settings") loadState();
         }

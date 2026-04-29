@@ -6,3 +6,4 @@ chroma_db
 config/workspace_config.json
 app_paths.py
 workspace/
+Memory/llm_calls.jsonl

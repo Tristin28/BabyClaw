@@ -1,9 +1,9 @@
-from src.Agents.BaseAgent import Agent
-from src.message import Message
-from src.Memory.MessageRepository import MessageRepository
-from src.Memory.VectorRepository import VectorRepository
-from src.Memory.sql_database import DatabaseManager
-from src.OllamaClient import OllamaClient
+from src.agents.BaseAgent import Agent
+from src.core.message import Message
+from src.memory.MessageRepository import MessageRepository
+from src.memory.VectorRepository import VectorRepository
+from src.memory.sql_database import DatabaseManager
+from src.llm.OllamaClient import OllamaClient
 from datetime import datetime, timezone
 
 class MemoryAgent(Agent):
@@ -67,7 +67,7 @@ class MemoryAgent(Agent):
         '''
         return self.sql_repo.get_recent_messages(conversation_id=conversation_id,k=k)
 
-    def get_pinned_facts_text(self) -> str:
+    def get_pinned_facts_text(self, allowed_memory_types: tuple[str, ...] = None) -> str:
         '''
             Always-on context: pulls every stored user_fact and user_preference
             and dedupes by topic (newest wins). Lets the planner/responder see
@@ -78,7 +78,8 @@ class MemoryAgent(Agent):
         docs = results.get("documents") or []
         metas = results.get("metadatas") or []
 
-        grouped = {"user_fact": {}, "user_preference": {}}
+        allowed = set(allowed_memory_types or ("user_fact", "user_preference"))
+        grouped = {memory_type: {} for memory_type in allowed}
 
         for fact, meta in zip(docs, metas):
             meta = meta or {}
@@ -87,7 +88,7 @@ class MemoryAgent(Agent):
             topic = meta.get("topic", "")
             timestamp = meta.get("timestamp", "")
 
-            if memory_type not in grouped:
+            if memory_type not in allowed:
                 continue
 
             if not topic:
@@ -171,7 +172,7 @@ class MemoryAgent(Agent):
         return Message(conversation_id=message.conversation_id, step_index=message.step_index, sender="memory", receiver="coordinator", 
                        target_agent=None, message_type="sql_store", status=status,response=response, visibility="internal") 
 
-    def get_relevant_memory(self, task: str, k: int) -> str:
+    def get_relevant_memory(self, task: str, k: int, allowed_memory_types: tuple[str, ...] = None) -> str:
         '''
             Method will query a vector db in order to return content which is relative to the respective task that is being passed
         '''
@@ -187,13 +188,18 @@ class MemoryAgent(Agent):
             distances = results["distances"][0] #respective distances from query to those chunks
             meta_data = results["metadatas"][0] #stores [[dict]]
 
-            candidates = [(fact, meta) for fact, dist, meta in zip(retrieved_memories, distances, meta_data) if dist <= MemoryAgent.RELEVANCE_THRESHOLD]
+            allowed = set(allowed_memory_types or ("user_fact", "user_preference"))
+            candidates = [
+                (fact, meta)
+                for fact, dist, meta in zip(retrieved_memories, distances, meta_data)
+                if dist <= MemoryAgent.RELEVANCE_THRESHOLD and (meta or {}).get("memory_type") in allowed
+            ]
 
             #retrieving the respective facts which do not conflict by applying the respective method
             filtered_candidates = self.resolve_conflicts(candidates=candidates)
             relevance_lines = [fact for fact, _ in filtered_candidates]
 
-        pinned = self.get_pinned_facts_text()
+        pinned = self.get_pinned_facts_text(allowed_memory_types=allowed_memory_types)
 
         sections = []
         if pinned:
@@ -461,19 +467,19 @@ class MemoryAgent(Agent):
 
         return False
     
-    def get_memory_by_mode(self, task: str, mode: str, k: int = 5) -> str:
+    def get_memory_by_mode(self, task: str, mode: str, k: int = 5, allowed_memory_types: tuple[str, ...] = None) -> str:
         if mode == "none":
             return ""
 
         if mode == "pinned_only":
-            return self.get_pinned_facts_text()
+            return self.get_pinned_facts_text(allowed_memory_types=allowed_memory_types)
 
         if mode == "relevant_only":
-            return self.get_relevant_memory(task=task, k=k)
+            return self.get_relevant_memory(task=task, k=k, allowed_memory_types=allowed_memory_types)
 
         if mode == "full":
-            pinned = self.get_pinned_facts_text()
-            relevant = self.get_task_relevant_memory_only(task=task, k=k)
+            pinned = self.get_pinned_facts_text(allowed_memory_types=allowed_memory_types)
+            relevant = self.get_task_relevant_memory_only(task=task, k=k, allowed_memory_types=allowed_memory_types)
 
             sections = []
 
@@ -487,7 +493,7 @@ class MemoryAgent(Agent):
 
         return ""
     
-    def get_task_relevant_memory_only(self, task: str, k: int) -> str:
+    def get_task_relevant_memory_only(self, task: str, k: int, allowed_memory_types: tuple[str, ...] = None) -> str:
         results = self.vector_repo.retrieve_relevant_memory(task=task, k=k)
 
         documents_outer = results.get("documents") or []
@@ -499,7 +505,12 @@ class MemoryAgent(Agent):
         distances = results["distances"][0]
         meta_data = results["metadatas"][0]
 
-        candidates = [(fact, meta) for fact, dist, meta in zip(retrieved_memories, distances, meta_data) if dist <= MemoryAgent.RELEVANCE_THRESHOLD]
+        allowed = set(allowed_memory_types or ("user_fact", "user_preference"))
+        candidates = [
+            (fact, meta)
+            for fact, dist, meta in zip(retrieved_memories, distances, meta_data)
+            if dist <= MemoryAgent.RELEVANCE_THRESHOLD and (meta or {}).get("memory_type") in allowed
+        ]
 
         filtered_candidates = self.resolve_conflicts(candidates=candidates)
 
