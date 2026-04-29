@@ -411,6 +411,3 @@ It reduces risk through:
 
 The LLM still helps with reasoning, but deterministic code controls how the
 workflow actually runs.
-
-```
-```
