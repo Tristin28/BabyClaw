@@ -2,7 +2,7 @@ from src.agents.BaseAgent import Agent
 from src.llm.OllamaClient import OllamaClient
 from src.core.message import Message
 from src.agents.reviewing.ReviewPrompt import REVIEWER_SYSTEM_PROMPT
-from src.action_constants import MUTATION_TOOLS, CONTENT_WRITING_TOOLS, GENERATED_ARTIFACT_TERMS, CREATIVE_ARTIFACT_PREFIXES
+from src.action_constants import MUTATION_TOOLS, CONTENT_WRITING_TOOLS, GENERATED_ARTIFACT_TERMS, CREATIVE_ARTIFACT_PREFIXES, CONTEXTUAL_REFERENCE_PRONOUNS, CONTEXTUAL_REFERENCE_PHRASES
 import json 
 import re
 
@@ -364,6 +364,12 @@ class ReviewerAgent(Agent):
                     continue
 
                 if any(term in lowered_text for term in GENERATED_ARTIFACT_TERMS):
+                    continue
+
+                if lowered_text in CONTEXTUAL_REFERENCE_PRONOUNS:
+                    continue
+
+                if lowered_text in CONTEXTUAL_REFERENCE_PHRASES:
                     continue
 
                 return text

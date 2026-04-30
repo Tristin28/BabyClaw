@@ -1,7 +1,7 @@
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
-from src.action_constants import MUTATION_TOOLS, MUTATION_PATH_ARGS, GENERATED_ARTIFACT_TERMS, CREATIVE_ARTIFACT_PREFIXES
+from src.action_constants import MUTATION_TOOLS, MUTATION_PATH_ARGS, GENERATED_ARTIFACT_TERMS, CREATIVE_ARTIFACT_PREFIXES, CONTEXTUAL_REFERENCE_PRONOUNS, CONTEXTUAL_REFERENCE_PHRASES
 from src.tools.utils import WorkspaceConfig
 
 class PlanCompiler:
@@ -19,7 +19,8 @@ class PlanCompiler:
     MUTATION_TOOLS = MUTATION_TOOLS
     MUTATION_PATH_ARGS = MUTATION_PATH_ARGS
 
-    def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None, route: dict = None, user_task: str = ""):
+    def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None, route: dict = None, 
+                 user_task: str = "", context_resolution: dict = None):
         """
         available_tools should be the same planner-facing tool descriptions
         given to the PlannerAgent.
@@ -32,7 +33,7 @@ class PlanCompiler:
         self.workspace_config = workspace_config
         self.route = route
         self.user_task = user_task or ""
-
+        self.context_resolution = context_resolution or {}
         self.tool_names = {
             tool["name"]
             for tool in available_tools
@@ -389,6 +390,13 @@ class PlanCompiler:
             if any(term in lowered_text for term in GENERATED_ARTIFACT_TERMS):
                 continue
 
+            if lowered_text in CONTEXTUAL_REFERENCE_PRONOUNS:
+                continue
+
+            if lowered_text in CONTEXTUAL_REFERENCE_PHRASES:
+                continue
+
+
             return text
 
         return None
@@ -426,6 +434,43 @@ class PlanCompiler:
                 f"Plan rejected: the user explicitly asked to write '{exact_text}', "
                 "but no direct file-writing content argument used that text."
             )
+        
+    def enforce_resolved_content(self, steps: list[dict]) -> None:
+        '''
+            When ContextResolver mapped a pronoun like "it" to a concrete previous
+            assistant response or generated content, the planner LLM is not
+            trusted to copy that text into args["content"]. We deterministically
+            rewrite content-writing steps so the resolved content actually lands
+            in the file. Steps that chain from a generate_content step via
+            content_step are left alone because their content comes from runtime.
+        '''
+        planner_context = self.context_resolution.get("planner_context") or {}
+        resolved_content = planner_context.get("resolved_content")
+
+        if not isinstance(resolved_content, str) or resolved_content == "":
+            return
+
+        content_tools = {"create_file", "write_file", "append_file"}
+        placeholder_values = {"", "it", "this", "that", "them", "those"}
+
+        for step in steps:
+            if step.get("tool") not in content_tools:
+                continue
+
+            args = step.get("args", {})
+
+            # A real chained value from a previous step wins; do not override it.
+            if "content_step" in args:
+                continue
+
+            existing = args.get("content")
+            if isinstance(existing, str) and existing.strip().lower() not in placeholder_values:
+                # Literal user-provided text already enforced by
+                # enforce_exact_written_text. Keep it.
+                continue
+
+            args["content"] = resolved_content
+            step["args"] = args
                     
     def compile(self, raw_plan: dict) -> dict:
         self.validate_top_level_schema(raw_plan)
@@ -436,6 +481,7 @@ class PlanCompiler:
 
         normalised_steps = self.apply_safe_defaults(normalised_steps)
         self.enforce_exact_written_text(normalised_steps)
+        self.enforce_resolved_content(normalised_steps)
         self.repair_placeholder_chains(normalised_steps)
         self.repair_bare_step_marker_args(normalised_steps)
         self.reject_fake_step_strings(normalised_steps)

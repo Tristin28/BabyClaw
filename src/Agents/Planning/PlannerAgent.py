@@ -4,6 +4,7 @@ from src.core.message import Message
 from src.agents.planning.PlanCompiler import PlanCompiler
 from src.agents.planning.PlannerPrompt import PLANNER_SYSTEM_PROMPT
 from src.tools.utils import WorkspaceConfig
+import json
 
 class PlannerAgent(Agent):
     PLANNER_SYSTEM_PROMPT = PLANNER_SYSTEM_PROMPT
@@ -40,6 +41,10 @@ class PlannerAgent(Agent):
         if planner_input["context"]:
             sections.append(f"Relevant memory:\n{planner_input['context']}")
 
+        context_resolution = planner_input.get("context_resolution") or {}
+        if context_resolution.get("has_references"):
+            sections.append(self.build_context_resolution_section(context_resolution))
+
         requested_paths = planner_input.get("requested_paths") or []
         allowed_parent_dirs = planner_input.get("allowed_parent_dirs") or []
 
@@ -62,6 +67,58 @@ class PlannerAgent(Agent):
 
         messages.append({"role": "user", "content": "\n\n".join(sections)})
         return messages
+    
+    def build_context_resolution_section(self, context_resolution: dict) -> str:
+        '''
+            Render ContextResolver output as a deterministic block the planner
+            can rely on. The planner must use these resolutions instead of
+            treating pronouns or contextual phrases as literal content.
+        '''
+        resolved = context_resolution.get("resolved_references", []) or []
+        unresolved = context_resolution.get("unresolved_references", []) or []
+        planner_context = context_resolution.get("planner_context", {}) or {}
+
+        lines = ["RESOLVED CONTEXTUAL REFERENCES (authoritative; the Coordinator already mapped these):"]
+
+        if resolved:
+            for ref in resolved:
+                summary = f"- '{ref.get('phrase')}' -> {ref.get('source_type')}"
+                if ref.get("path"):
+                    summary += f" (path: {ref['path']})"
+                if ref.get("content") is not None:
+                    preview = ref["content"]
+                    if isinstance(preview, str) and len(preview) > 200:
+                        preview = preview[:200] + "..."
+                    summary += f" (content preview: {preview!r})"
+                lines.append(summary)
+        else:
+            lines.append("- (none resolved)")
+
+        if unresolved:
+            lines.append("Unresolved references (do not invent values):")
+            for ref in unresolved:
+                lines.append(f"- '{ref.get('phrase')}' could not be resolved: {ref.get('reason')}")
+
+        if context_resolution.get("should_ask_clarification"):
+            lines.append(
+                "Coordinator could not resolve at least one reference. Do not invent missing "
+                "content or paths. If essential context is missing, plan a direct_response "
+                "asking the user for clarification."
+            )
+
+        if planner_context:
+            lines.append("Structured planner_context:")
+            lines.append(json.dumps(planner_context, indent=2, default=str))
+
+        lines.append(
+            "Rules:\n"
+            "- Use these resolved references instead of treating pronouns or contextual phrases as literal text.\n"
+            "- Do not write the literal word 'it', 'this', 'that', 'them', or 'those' as file content.\n"
+            "- If resolved_content is provided, that is the content the user wants saved.\n"
+            "- If resolved_file_path is provided, that is the file the user is referring to.\n"
+        )
+
+        return "\n".join(lines)
 
     def validate_planner_input(self,planner_input:dict):
         required_keys = ["task","context","k_recent_messages","tools","conversation_id","step_index"]
@@ -132,7 +189,8 @@ class PlannerAgent(Agent):
                 available_tools=planner_input["tools"],
                 workspace_config=self.workspace_config,
                 route=planner_input.get("route", {}),
-                user_task=planner_input["task"]
+                user_task=planner_input["task"],
+                context_resolution=planner_input.get("context_resolution") or {}
             )
             response = compiler.compile(raw_response)
 

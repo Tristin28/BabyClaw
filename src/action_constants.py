@@ -91,3 +91,33 @@ CREATIVE_ARTIFACT_PREFIXES = (
     "a letter",
     "an email",
 )
+
+CREATIVE_ARTIFACT_PREFIXES = (
+    "a poem",
+    "an poem",
+    "poem",
+    "a story",
+    "short story",
+    "a letter",
+    "an email",
+)
+
+CONTEXTUAL_REFERENCE_PRONOUNS = {
+    "it",
+    "this",
+    "that",
+    "them",
+    "those",
+}
+
+CONTEXTUAL_REFERENCE_PHRASES = (
+    "the previous answer",
+    "the previous response",
+    "previous answer",
+    "previous response",
+    "the result",
+    "the output",
+    "the generated content",
+    "the previous file",
+    "the last file",
+)

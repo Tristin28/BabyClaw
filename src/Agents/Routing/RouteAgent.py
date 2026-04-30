@@ -285,7 +285,7 @@ class RouteAgent(Agent):
                 "The current task explicitly asks for generated content in a file; "
                 "using workspace_mutation."
             )
-            normalised["confidence"] = max(float(normalised.get("confidence", 0.0)), 0.95)
+            normalised["confidence"] = max(float(normalised.get("confidence", 0.0)), 1.0)
             return normalised
 
         if response.get("task_type") != "contextual_followup":

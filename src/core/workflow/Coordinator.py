@@ -1,6 +1,8 @@
 from src.agents.planning.PlannerAgent import PlannerAgent
 from src.agents.planning.PlanCompiler import PlanCompiler
 from src.agents.execution.ExecutorAgent import ExecutorAgent
+from src.core.context.ActiveContext import ActiveContext
+from src.core.context.ContextResolver import ContextResolver
 from src.core.workflow.ExecutionVerifier import ExecutionVerifier
 from src.agents.memory.MemoryAgent import MemoryAgent
 from src.agents.reviewing.ReviewerAgent import ReviewerAgent
@@ -11,6 +13,7 @@ from src.core.message import Message
 from src.llm.OllamaClient import OllamaClient
 import json
 import re
+from src.tools.utils import WorkspaceConfig
 
 '''
     This is the agent which manages workflow, and configures the respective agents i.e. it acts like the runner method,
@@ -35,7 +38,7 @@ class Coordinator():
 
     def __init__(self, planner: PlannerAgent, executor: ExecutorAgent, reviewer: ReviewerAgent,
                  memory: MemoryAgent, router: RouteAgent, planner_tool_descriptions: list[dict], tool_registry: dict, llm_client: OllamaClient,
-                 execution_verifier: ExecutionVerifier = None):
+                 execution_verifier: ExecutionVerifier = None, workspace_config: WorkspaceConfig = None):
         self.planner = planner
         self.planner_tool_descriptions = planner_tool_descriptions
         self.executor = executor
@@ -45,7 +48,8 @@ class Coordinator():
         self.router = router
         self.llm_client = llm_client
         self.execution_verifier = execution_verifier
-
+        self.active_context = ActiveContext()
+        self.workspace_config = workspace_config
     """
         Routing, scope, and planner input builders that decide what context and tools each task may use.
     """
@@ -148,8 +152,20 @@ class Coordinator():
             return list_tree(path=".")
         
         return self.tool_registry["list_dir"]["func"](path=".")
+    
 
-    def build_planner_input(self, user_task: str, route: dict, conversation_id: int, step_index: int, replan_feedback: str = "") -> dict:
+    def resolve_context(self, user_task: str) -> dict:
+        '''
+            Run ContextResolver against the current ActiveContext snapshot. This
+            is called between routing and planner-input construction so the
+            planner receives structured information about what pronouns and
+            contextual phrases really mean in this turn.
+        '''
+        resolver = ContextResolver(active_context=self.active_context, workspace_config=self.workspace_config)
+        return resolver.resolve(user_task=user_task)
+
+    def build_planner_input(self, user_task: str, route: dict, conversation_id: int, step_index: int, 
+                            replan_feedback: str = "", context_resolution: dict = None) -> dict:
         scoped_context = self.build_scoped_context(user_task, route)
         if replan_feedback:
             scoped_context = f"{scoped_context}\n\nREPLAN CONTEXT\n{replan_feedback}" if scoped_context else f"REPLAN CONTEXT:\n{replan_feedback}"
@@ -170,6 +186,7 @@ class Coordinator():
             "route": route,
             "conversation_id": conversation_id,
             "step_index": step_index,
+            "context_resolution": context_resolution or {},
         }
 
     def extract_requested_path_constraints(self, user_task: str, route: dict, selected_tools: list[dict]) -> tuple[list[str], list[str]]:
@@ -731,6 +748,10 @@ class Coordinator():
         memory_msg = self.memory.store_long_term_memory(user_task=user_task, conversation_id=conversation_id, step_index=self.MEMORY_STEP)
         self.memory.store_message(message=memory_msg)
 
+        # ActiveContext is only updated on success so a rejected/rolled-back
+        # workflow does not leak misleading state into later turns.
+        self.active_context.update_from_execution(executor_response)
+
         return self.build_success_message(conversation_id=conversation_id, step_index=self.FINAL_STEP,
                                           review_summary=reviewer_response.get("review_summary", "Execution accepted."), 
                                           execution_response=executor_response)
@@ -761,8 +782,10 @@ class Coordinator():
         route = plan_response.get("route") or self.run_router(conversation_id=conversation_id, user_task=user_task)
         route = self.validate_route(route)
 
+        context_resolution = self.resolve_context(user_task=user_task)
+
         planner_input = self.build_planner_input(user_task=user_task, route=route, conversation_id=conversation_id, step_index=self.PLANNER_STEP,
-                                                 replan_feedback=replan_feedback)
+                                                 replan_feedback=replan_feedback, context_resolution=context_resolution)
 
         planner_msg = self.try_plan(planner_input=planner_input)
         if planner_msg.status == "failed":
@@ -894,10 +917,17 @@ class Coordinator():
                                response={"content": user_task}, visibility="external")
         self.memory.store_message(message=user_message)
 
+        self.active_context.record_user_message(user_task)
+
         route = self.run_router(conversation_id=conversation_id, user_task=user_task)
 
+        # ContextResolver runs after routing so vague pronouns ("it", "the
+        # previous answer") are mapped to concrete session state before the
+        # planner ever sees them. This keeps the planner from guessing.
+        context_resolution = self.resolve_context(user_task=user_task)
+
         planner_input = self.build_planner_input(user_task=user_task, route=route,
-                                                 conversation_id=conversation_id, step_index=self.PLANNER_STEP)
+                                                 conversation_id=conversation_id, step_index=self.PLANNER_STEP, context_resolution=context_resolution)
 
         planner_msg = self.try_plan(planner_input=planner_input)
 
