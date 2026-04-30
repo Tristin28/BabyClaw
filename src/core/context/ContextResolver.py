@@ -16,15 +16,12 @@ import re
 
 from pathlib import PurePosixPath
 
-from src.action_constants import (
-    CONTEXTUAL_REFERENCE_PRONOUNS,
-    CONTEXTUAL_REFERENCE_PHRASES,
-)
+from src.action_constants import CONTEXTUAL_REFERENCE_PRONOUNS, CONTEXTUAL_REFERENCE_PHRASES
+from src.tools.utils import WorkspaceConfig 
 from src.core.context.ActiveContext import ActiveContext
 
 
-# Verbs that indicate the reference is the *content* the user wants written or
-# saved somewhere. Example: "save it in a text file" -> "it" is content.
+# Verbs that indicate the reference is the *content* the user wants written or saved somewhere. Example: "save it in a text file" -> "it" is content.
 SAVE_VERBS = {
     "save",
     "store",
@@ -35,8 +32,7 @@ SAVE_VERBS = {
     "log",
 }
 
-# Verbs that indicate the reference is a *file* the user wants to act on.
-# Example: "edit it" -> "it" is the file.
+# Verbs that indicate the reference is a *file* the user wants to act on, Example: "edit it" -> "it" is the file.
 FILE_VERBS = {
     "edit",
     "show",
@@ -57,7 +53,7 @@ MAX_INLINE_CONTENT_CHARS = 4000
 
 
 class ContextResolver:
-    def __init__(self, active_context: ActiveContext, workspace_config=None):
+    def __init__(self, active_context: ActiveContext, workspace_config: WorkspaceConfig =None):
         self.active_context = active_context
         self.workspace_config = workspace_config
 
@@ -378,10 +374,8 @@ class ContextResolver:
 
     def build_planner_context(self, resolved_references: list[dict]) -> dict:
         '''
-            Flatten the resolved references into a small structured context
-            object for the planner. Only the most relevant content/path is
-            promoted to the top-level keys so the planner does not have to
-            scan a list to find them.
+            Flatten the resolved references into a small structured context object for the planner. Only the most relevant content/path is
+            promoted to the top-level keys so the planner does not have to scan a list to find them.
         '''
         planner_context: dict = {}
 

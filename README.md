@@ -54,6 +54,14 @@ The GUI runs at:
 http://127.0.0.1:5000
 ```
 
+By default the Ollama client uses `qwen2.5:3b`. To use a different local
+Ollama model, pass the model name when creating the `OllamaClient` instance in
+`src/app/Main.py` or `src/app/gui.py`, for example:
+
+```python
+llm_client = OllamaClient(model="llama3.1:8b")
+```
+
 ## CLI Commands
 
 Inside the CLI, you can type natural-language tasks directly.
@@ -90,6 +98,7 @@ User task
   -> RouteAgent
   -> WorkflowPolicyRegistry
     -> MemoryRoutingPolicy
+  -> ContextResolver
   -> PlannerAgent
   -> PlanCompiler
   -> ExecutorAgent
@@ -107,10 +116,14 @@ Responsibilities:
   access, mutation rights, and memory scope.
 - `MemoryRoutingPolicy` decides whether short-term or long-term memory should be
   visible for the current task.
+- `ActiveContext` keeps immediate session state such as the last assistant
+  response, generated content, active file, and recently touched files.
+- `ContextResolver` deterministically resolves references such as "it", "this",
+  "that file", and "the previous answer" before planning.
 - `PlannerAgent` produces a structured plan using only route-approved tools.
 - `PlanCompiler` validates and normalises the plan before anything runs.
 - `ExecutorAgent` executes approved plan steps through the registered tools.
-- `ExecutionVerifier` checks deterministic execution constraints.
+- `ExecutionVerifier` checks observable workspace state after execution.
 - `ReviewerAgent` reviews whether the result satisfies the original task.
 - `MemoryAgent` stores workflow messages and selected durable memories.
 
@@ -136,6 +149,11 @@ The GUI memory tab exposes the internal workflow trace. These message records ar
 technical by design: they show which agent produced which message, at which
 workflow step, and with what status.
 
+Immediate contextual references are handled separately from long-term memory.
+`ActiveContext` is kept in memory by the coordinator during the running session,
+and `ContextResolver` uses it to resolve phrases such as "save it" or "edit that
+file" without querying the SQL or vector memory stores.
+
 ## Software Architecture
 
 The source tree is split by responsibility:
@@ -149,6 +167,10 @@ src/
       index.html               GUI template
 
   core/
+    context/
+      ActiveContext.py         Immediate session context state
+      ContextResolver.py       Deterministic reference resolution
+
     message.py                 Shared workflow message object
     workflow/
       Coordinator.py           Main workflow orchestrator
@@ -220,29 +242,6 @@ Memory/llm_calls.jsonl         Raw LLM call log
 Runtime data can grow over time. If you want a clean local run, remove generated
 files under `Memory/` and reset the workspace path in `config/workspace_config.json`.
 
-## Testing
-
-Install test tooling if it is not already available:
-
-```bash
-pip install pytest
-```
-
-Run all tests:
-
-```bash
-pytest -q tests
-```
-
-Run a focused subset:
-
-```bash
-pytest -q tests/PlannerTest.py tests/ReviewerTest.py tests/PipelineTest.py
-```
-
-The tests cover route scoping, planning, plan compilation, execution, review,
-rollback, replanning, memory behaviour, and architecture guard cases.
-
 ## Design Goals
 
 BabyClaw is designed to keep local agent workflows controlled and inspectable.
@@ -257,6 +256,7 @@ The main safeguards are:
 - deterministic execution checks,
 - reviewer checks,
 - rollback support,
+- immediate context resolution,
 - controlled memory visibility and storage.
 
 The LLM provides reasoning, but deterministic code decides what context it sees,

@@ -7,11 +7,8 @@ from src.llm.OllamaClient import OllamaClient
 from datetime import datetime, timezone
 
 class MemoryAgent(Agent):
-    '''
-        Vector hits with squared L2 distance below this threshold count as relevant.
-        Chroma's default embedding returns squared L2; 1.2 maps to roughly cosine 0.4,
-        which still catches paraphrases like "what is my name?" matching a stored fact.
-    '''
+    
+    #Vector hits with squared L2 distance (euclidean distance) below this threshold count as relevant.
     RELEVANCE_THRESHOLD = 1.2
 
     SCHEMA = {

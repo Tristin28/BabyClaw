@@ -1,15 +1,11 @@
 '''
-    ActiveContext is a small explicit session-state record kept by the Coordinator
-    and consumed by ContextResolver. It exists so that vague references such as
-    "it", "the previous answer", "the file" can be resolved against concrete
-    state instead of relying on the LLM to guess.
+    ActiveContext is a small explicit session-state record kept by the Coordinator and consumed by ContextResolver. It exists so that vague references such as
+    "it", "the previous answer", "the file" can be resolved against concrete state instead of relying on the LLM to guess and potentially have more LLMs hallucinate
 
-    The Coordinator owns ActiveContext. It is updated:
-    - when the user sends a new message,
-    - after a successful workflow finishes (assistant response, generated content,
-      created/modified files).
-
-    Keeping this state explicit avoids feeding ambiguous strings into the planner.
+    The Coordinator owns ActiveContext Hence why it would be found composed (i.e. composition relationship) inside it. 
+    It is updated:
+        - when the user sends a new message,
+        - after a successful workflow finishes (assistant response, generated content,created/modified files).
 '''
 
 
@@ -62,13 +58,11 @@ class ActiveContext:
 
     def update_from_execution(self, executor_response: dict) -> None:
         '''
-            Pulls the relevant signals out of a successful execution trace so
-            ContextResolver can later resolve references like "it" or
+            Pulls the relevant signals out of a successful execution trace so ContextResolver can later resolve references like "it" or 
             "the previous file" without re-running the LLM.
 
-            The mapping is intentionally narrow: only tools whose semantics are
-            clear (read/list/find -> viewed; create -> created; write/append/
-            replace -> modified; delete -> active_file cleared) update state.
+            The mapping is intentionally narrow: only tools whose semantics are clear update state.
+                (read/list/find -> viewed; create -> created; write/append/replace -> modified; delete -> active_file cleared) 
         '''
         if not isinstance(executor_response, dict):
             return

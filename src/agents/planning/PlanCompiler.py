@@ -25,9 +25,8 @@ class PlanCompiler:
         available_tools should be the same planner-facing tool descriptions
         given to the PlannerAgent.
 
-        workspace_config is used to validate path-like planner arguments before
-        execution or permission. This means hallucinated paths like
-        '../../etc/passwd' fail during plan compilation.
+        workspace_config is used to validate path-like planner arguments before execution or permission. 
+        This means hallucinated paths like '../../etc/passwd' fail during plan compilation.
         """
         self.available_tools = available_tools
         self.workspace_config = workspace_config
@@ -53,9 +52,9 @@ class PlanCompiler:
         Validates direct path-like arguments before execution.
 
         This prevents planner-hallucinated paths from reaching:
-        - permission requests,
-        - tool execution,
-        - rollback logic.
+            - permission requests,
+            - tool execution,
+            - rollback logic.
 
         Only direct string args are checked here.
         *_step args are skipped because their values come from previous tool

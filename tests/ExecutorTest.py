@@ -5,8 +5,20 @@ import copy
 #Method which will handle redundant test logic
 def run_test(name, executor, plan_response):
     print(f"\n---- {name} ----")
-    msg = executor.run( conversation_id=1,step_index=2, plan_response=plan_response)
-    print(msg)
+    execution_state = executor.initialise_execution_state(plan_response=plan_response)
+
+    try:
+        while not executor.is_execution_complete(execution_state):
+            runnable_steps = executor.get_runnable_steps(execution_state)
+            if not runnable_steps:
+                blocked_steps = [step["id"] for step in execution_state["remaining_steps"]]
+                raise RuntimeError(f"No runnable steps remain. Blocked steps: {blocked_steps}")
+
+            execution_state = executor.execute_tools(execution_state, runnable_steps)
+
+        print(executor.build_execution_result(execution_state))
+    except Exception as e:
+        print(f"FAILED: {e}")
 
 '''
     Fake tools for now, as they are used for testing and even giving it fake files and folders
@@ -43,13 +55,13 @@ def main():
         "read_file": {
             "func": read_file,
             "input_map": {
-                "file_id": "file_id"
+                "file_id": "path"
             }
         },
         "summarise_txt": {
             "func": summarise_txt,
             "input_map": {
-                "text": "source_step"
+                "text": "text"
             }
         },
         "list_dir": {
@@ -69,7 +81,7 @@ def main():
                 "id": 1,
                 "tool": "read_file",
                 "args": {
-                    "file_id": "document.txt"
+                    "path": "document.txt"
                 },
                 "depends_on": []
             },
@@ -77,7 +89,7 @@ def main():
                 "id": 2,
                 "tool": "summarise_txt",
                 "args": {
-                    "source_step": 1
+                    "text_step": 1
                 },
                 "depends_on": [1]
             },
@@ -103,12 +115,12 @@ def main():
 
     #Testing missing file
     missing_file = copy.deepcopy(base_plan)
-    missing_file["steps"][0]["args"]["file_id"] = "missing.txt"
+    missing_file["steps"][0]["args"]["path"] = "missing.txt"
     run_test("MISSING FILE", executor, missing_file)
 
     #Test bad source_step
     bad_source_step = copy.deepcopy(base_plan)
-    bad_source_step["steps"][1]["args"]["source_step"] = 99
+    bad_source_step["steps"][1]["args"]["text_step"] = 99
     run_test("BAD SOURCE STEP", executor, bad_source_step)
 
 

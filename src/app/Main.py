@@ -19,6 +19,7 @@ from src.tools.tool_registry import build_tool_registry
 from src.tools.tool_description import PLANNER_TOOL_DESCRIPTIONS
 from src.tools.utils import WorkspaceConfig
 
+from src.core.message import Message
 
 CONVERSATION_ID = 1
 
@@ -322,7 +323,7 @@ def build_system():
     ensure_project_dirs(workspace_path=workspace_path)
     debug_paths(workspace_path=workspace_path)
 
-    llm_client = OllamaClient()
+    llm_client = OllamaClient() #Can modify this as it contains, an argument 'model' which can be used to specify the model to use for the LLM client. By default it uses qwen2.5:3b
 
     db_manager = DatabaseManager(db_path=str(DB_PATH))
     db_manager.init_db()
@@ -338,10 +339,7 @@ def build_system():
         "workspace_root": str(workspace.root)
     })
 
-    tool_registry = build_tool_registry(
-        llm_client=llm_client,
-        workspace=workspace
-    )
+    tool_registry = build_tool_registry(llm_client=llm_client, workspace=workspace)
 
     debug_print("Tool registry loaded", {
         "tools": list(tool_registry.keys())
@@ -354,24 +352,16 @@ def build_system():
     memory = MemoryAgent(db_manager=db_manager, llm_client=llm_client)
     router = RouteAgent(llm_client=llm_client)
 
-    coordinator = Coordinator(
-        planner=planner,
-        executor=executor,
-        reviewer=reviewer,
-        memory=memory,
-        planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
-        tool_registry=tool_registry,
-        llm_client=llm_client,
-        router = router,
-        execution_verifier=execution_verifier
-    )
+    coordinator = Coordinator(planner=planner, executor=executor, reviewer=reviewer, memory=memory, 
+                              planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS, tool_registry=tool_registry, llm_client=llm_client, 
+                              router = router, execution_verifier=execution_verifier)
 
     debug_print("BabyClaw system built successfully")
 
     return coordinator, workspace, memory
 
 
-def display_result(message):
+def display_result(message: Message):
     response = message.response or {}
 
     debug_message_object(message)
