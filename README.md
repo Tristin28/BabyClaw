@@ -176,7 +176,7 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
-Pull a local model:
+Pull a local model - Example:
 
 ```bash
 ollama pull qwen2.5:3b
