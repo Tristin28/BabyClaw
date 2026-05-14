@@ -36,8 +36,7 @@ All file changes are sandboxed inside the configured workspace and require
 explicit user approval at the CLI/GUI before they run.
 
 ## How The System Works
-
-![Documentation Image](../Documentation/BabyClaw.drawio.png)
+<img width="822" height="722" alt="BabyClaw drawio" src="https://github.com/user-attachments/assets/2a4b337a-d23b-4252-b933-614bd6d45f2f" />
 
 ## Requirements
 
