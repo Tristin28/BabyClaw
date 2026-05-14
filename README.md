@@ -20,16 +20,16 @@ The router classifies each request into one of six task types. The Coordinator
 turns the task type into a workflow contract (allowed tools, memory scope,
 permissions). Supported task types:
 
-- **Direct chat responses** — explanations, advice, drafting text in chat,
+- **Direct chat responses**; explanations, advice, drafting text in chat,
   answering general questions ("what is reinforcement learning?").
-- **Memory questions** — questions about durable user facts/preferences the
+- **Memory questions**; questions about durable user facts/preferences the
   system has stored ("what is my name?").
-- **Contextual follow-ups** — requests that depend on previous conversation
+- **Contextual follow-ups**; requests that depend on previous conversation
   ("make it shorter", "continue", "save that to a file").
-- **Workspace read** — read, list, find, search files/folders inside the
+- **Workspace read** ; read, list, find, search files/folders inside the
   configured workspace.
-- **Workspace summarise** — summarise or describe an existing file.
-- **Workspace mutation** — create, write, append, replace, delete, move,
+- **Workspace summarise** ; summarise or describe an existing file.
+- **Workspace mutation** ; create, write, append, replace, delete, move,
   copy files or directories.
 
 All file changes are sandboxed inside the configured workspace and require
@@ -55,43 +55,43 @@ User task
 
 What each stage does:
 
-- **Coordinator** — orchestrates the workflow, builds the layered planner
+- **Coordinator** ; orchestrates the workflow, builds the layered planner
   input, runs the execution loop, handles permission prompts, replans, and
   rolls back on failure.
-- **RouteAgent** — an LLM call that classifies the task into one of the six
+- **RouteAgent** ; an LLM call that classifies the task into one of the six
   task types. The only deterministic override left is a chat guard: if the
   user says "in chat", the route cannot become a file mutation.
-- **WorkflowPolicyRegistry** — frozen per-task-type contract that defines
+- **WorkflowPolicyRegistry** ; frozen per-task-type contract that defines
   `allowed_tools`, `allow_mutations`, `memory_mode`, and whether the
   workspace tree is exposed.
-- **MemoryRoutingPolicy** — decides whether short-term recent messages and
+- **MemoryRoutingPolicy** ; decides whether short-term recent messages and
   long-term vector memory should be visible for this task. Standalone chat
   questions do not pull memory; contextual follow-ups do.
-- **ActiveContext** — small in-memory record of the last assistant response,
+- **ActiveContext** ; small in-memory record of the last assistant response,
   last generated content, last viewed/modified/created file, and active
   file.
-- **ContextResolver** — deterministically maps phrases like "it", "the
+- **ContextResolver** ; deterministically maps phrases like "it", "the
   previous answer", "the file" to concrete entries in `ActiveContext` so
   the planner sees real values instead of pronouns.
-- **PlannerAgent** — LLM call that produces a structured plan (`goal`,
+- **PlannerAgent** ; LLM call that produces a structured plan (`goal`,
   `steps`, `planning_rationale`) using only the tools the route allows. A
   JSON schema with a tool-name enum is enforced at the Ollama layer.
-- **PlanCompiler** — pure Python validator. Rejects unknown tools, fake
+- **PlanCompiler** ; pure Python validator. Rejects unknown tools, fake
   step references, missing required args, unsafe paths, paths outside the
   user's requested filename, plans that claim a mutation route but contain
   no mutation tool, and so on. The planner cannot bypass it.
-- **ExecutorAgent** — runs only compiled plans, and only via the tool
+- **ExecutorAgent** ; runs only compiled plans, and only via the tool
   registry. Re-checks `allowed_tools` and `allow_mutations` per step,
   takes a rollback snapshot before every mutation, and pauses the loop
   whenever a step requires user permission.
-- **ExecutionVerifier** — independent of the reviewer; after execution it
+- **ExecutionVerifier** ; independent of the reviewer; after execution it
   reads the live filesystem and checks whether each mutating step produced
   the file state its resolved args claim.
-- **ReviewerAgent** — semantic check. Compares the result against the
+- **ReviewerAgent** ; semantic check. Compares the result against the
   current user task using deterministic structural checks (route scope,
   unrequested mutations, literal-text presence) plus an LLM judgement for
   topic relevance.
-- **MemoryAgent** — stores every workflow message to SQLite. After an
+- **MemoryAgent** ; stores every workflow message to SQLite. After an
   accepted result, decides via an LLM call whether anything in the user
   task should become a durable user fact or preference in the vector
   store.
@@ -134,33 +134,33 @@ executable, and verified.**
 
 Concrete safeguards layered behind the LLM:
 
-- **Route-scoped tool access** — `WorkflowPolicyRegistry` returns an
+- **Route-scoped tool access** ; `WorkflowPolicyRegistry` returns an
   immutable per-task-type contract. Planner can only emit tools in
   `allowed_tools`; executor refuses anything outside.
-- **`allow_mutations` flag** — mutation tools refuse to run on read or
+- **`allow_mutations` flag** ; mutation tools refuse to run on read or
   summarise routes even if a malformed plan slips past the compiler.
-- **Structured plan validation** — `PlanCompiler` rejects bad schemas,
+- **Structured plan validation** ; `PlanCompiler` rejects bad schemas,
   fake step references, unknown tools, missing args, future
   dependencies, and self-dependencies.
-- **Workspace sandbox** — every path is resolved through
+- **Workspace sandbox** ; every path is resolved through
   `WorkspaceConfig.resolve_workspace_path`. Absolute paths, `..`
   traversal, and symlink escapes are blocked.
-- **Symlink hardening** — `Path.resolve()` plus `os.path.realpath()`
+- **Symlink hardening** ; `Path.resolve()` plus `os.path.realpath()`
   cross-check, plus an explicit parent-chain symlink scan. A symlink
   inside the workspace pointing outside cannot be read, written,
   deleted, moved, or copied.
-- **Permission prompts** — every mutation tool is marked
+- **Permission prompts** ; every mutation tool is marked
   `requires_permission=True`. The execution loop pauses and asks the
   user before running.
-- **Rollback snapshots** — every mutation tool registers a snapshot
+- **Rollback snapshots** ; every mutation tool registers a snapshot
   before it runs. On failure, verifier rejection, or reviewer
   rejection, the Coordinator replays snapshots in reverse.
-- **Execution verification** — `ExecutionVerifier` reads the live
+- **Execution verification** ; `ExecutionVerifier` reads the live
   filesystem after execution and compares it against the resolved args.
-- **Reviewer checks** — deterministic checks for route scope,
+- **Reviewer checks** ; deterministic checks for route scope,
   unrequested mutations, and literal text presence, plus an LLM call
   for topic relevance.
-- **Loop and retry limits** — `MAX_WORKFLOW_ITERATIONS=3`,
+- **Loop and retry limits** ; `MAX_WORKFLOW_ITERATIONS=3`,
   `MAX_EXECUTION_LOOP_ITERATIONS=25`, `MAX_REPEATED_EXECUTION_STATES=2`.
 
 ## Requirements
@@ -329,9 +329,9 @@ workspace path in `config/workspace_config.json`.
 
 BabyClaw keeps two kinds of memory:
 
-- **SQLite message history** at `Memory/memory.db` — every agent message
+- **SQLite message history** at `Memory/memory.db` ; every agent message
   is logged for inspection and debugging.
-- **Vector long-term memory** at `Memory/chroma_db` — durable user facts
+- **Vector long-term memory** at `Memory/chroma_db` ; durable user facts
   and preferences. The LLM is asked whether anything in the user task is
   memory-worthy, the candidate memories are validated by Python rules,
   and only then are they written. This only happens after a workflow
