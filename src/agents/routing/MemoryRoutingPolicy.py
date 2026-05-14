@@ -34,14 +34,19 @@ class MemoryRoutingPolicy:
     }
 
     FOLLOWUP_PATTERNS = [
-        #Using Regex patterns as a sort of heuristic method to catch follow-up questions that rely on recent conversation
+        # Strong follow-up signals only. Weak pronouns ("it", "this", "that")
+        # were removed because they fired on standalone questions like
+        # "what is reinforcement learning?" and pulled unrelated memory into
+        # the prompt. Genuine follow-ups should be classified by RouteAgent
+        # as contextual_followup; this list is only a small safety net for
+        # direct_response tasks that clearly reference earlier turns.
         r"\bcontinue\b",
         r"\banother\b",
         r"\bsame\b",
         r"\bprevious\b",
-        r"\bthat\b",
-        r"\bthis\b",
-        r"\bit\b",
+        r"\blast\s+answer\b",
+        r"\bearlier\b",
+        r"\bbefore\b",
     ]
 
     @classmethod

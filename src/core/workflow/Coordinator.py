@@ -144,14 +144,92 @@ class Coordinator():
         return self.memory.get_recent_conversation_messages(conversation_id=conversation_id, k=short_term_k or 5)
 
     def build_scoped_workspace_contents(self, route: dict):
-        if not route["use_workspace"]:
+        """
+        Workspace tree is returned for any route that the WorkflowPolicy
+        marks workspace-aware, plus contextual_followup turns where an
+        active file is recorded in ActiveContext (the follow-up likely
+        refers to that file, so the planner needs to see the tree).
+        """
+        if not self.route_needs_workspace_view(route=route):
             return []
-        
+
         list_tree = self.tool_registry.get("list_tree", {}).get("func")
         if list_tree:
             return list_tree(path=".")
-        
+
         return self.tool_registry["list_dir"]["func"](path=".")
+
+    def route_needs_workspace_view(self, route: dict) -> bool:
+        if route.get("use_workspace"):
+            return True
+
+        if route.get("task_type") == "contextual_followup":
+            return bool(
+                self.active_context.active_file
+                or self.active_context.last_viewed_file
+                or self.active_context.last_modified_file
+                or self.active_context.last_created_file
+            )
+
+        return False
+
+    def build_filename_hints(self, user_task: str, workspace_contents, route: dict) -> dict:
+        """
+            Surface unambiguous filename matches to the planner.
+
+            Users often refer to a file without an extension ("open Coordinator").
+            This helper scans the workspace tree for files whose stem or full
+            name matches a candidate token in the user task. Unambiguous matches
+            become hints the planner can use directly. Ambiguous matches are
+            surfaced as alternatives only for read-only routes; mutation routes
+            only see unambiguous matches so the planner cannot accidentally
+            write to the wrong file.
+
+            Hints are advisory. The planner still picks the tool and the path,
+            and PlanCompiler + WorkspaceConfig still validate every path before
+            execution.
+        """
+        if not isinstance(user_task, str) or not user_task.strip():
+            return {}
+
+        if not workspace_contents:
+            return {}
+
+        from pathlib import PurePosixPath
+
+        file_paths = [path for path in workspace_contents if isinstance(path, str) and not path.endswith("/")]
+
+        by_lookup: dict[str, list[str]] = {}
+        for path in file_paths:
+            posix = PurePosixPath(path)
+            stem = posix.stem.lower()
+            full = posix.name.lower()
+            by_lookup.setdefault(stem, []).append(path)
+            if full != stem:
+                by_lookup.setdefault(full, []).append(path)
+
+        candidates: set[str] = set()
+        for match in re.findall(r'["\']([A-Za-z0-9_.\-]+)["\']', user_task):
+            candidates.add(match)
+        for match in re.findall(r"\b[A-Za-z][A-Za-z0-9_]{2,}(?:\.[A-Za-z0-9]{1,12})?\b", user_task):
+            candidates.add(match)
+
+        task_type = (route or {}).get("task_type", "")
+        strict = task_type == "workspace_mutation"
+
+        hints: dict[str, object] = {}
+        for candidate in candidates:
+            matches = by_lookup.get(candidate.lower())
+            if not matches:
+                continue
+
+            unique_matches = list(dict.fromkeys(matches))
+            if len(unique_matches) == 1:
+                hints[candidate] = unique_matches[0]
+            elif not strict:
+                hints[candidate] = unique_matches
+
+        return hints
     
 
     def resolve_context(self, user_task: str) -> dict:
@@ -164,7 +242,7 @@ class Coordinator():
         resolver = ContextResolver(active_context=self.active_context, workspace_config=self.workspace_config)
         return resolver.resolve(user_task=user_task)
 
-    def build_planner_input(self, user_task: str, route: dict, conversation_id: int, step_index: int, 
+    def build_planner_input(self, user_task: str, route: dict, conversation_id: int, step_index: int,
                             replan_feedback: str = "", context_resolution: dict = None) -> dict:
         scoped_context = self.build_scoped_context(user_task, route)
         if replan_feedback:
@@ -173,6 +251,7 @@ class Coordinator():
         scoped_recent_messages = self.build_scoped_recent_messages(conversation_id, route)
         selected_tools = self.select_tools_for_route(route)
         scoped_workspace_contents = self.build_scoped_workspace_contents(route)
+        filename_hints = self.build_filename_hints(user_task=user_task, workspace_contents=scoped_workspace_contents, route=route)
         requested_paths, allowed_parent_dirs = self.extract_requested_path_constraints(user_task=user_task, route=route, selected_tools=selected_tools)
 
         return {
@@ -181,6 +260,7 @@ class Coordinator():
             "k_recent_messages": scoped_recent_messages,
             "tools": selected_tools,
             "workspace_contents": scoped_workspace_contents,
+            "filename_hints": filename_hints,
             "requested_paths": requested_paths,
             "allowed_parent_dirs": allowed_parent_dirs,
             "route": route,

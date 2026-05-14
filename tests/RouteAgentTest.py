@@ -14,24 +14,23 @@ class FakeRouterLLM:
         }
 
 
-def test_router_normalises_standalone_creative_writing_to_direct_response():
-    router = RouteAgent(llm_client=FakeRouterLLM(task_type="contextual_followup"))
+def test_router_trusts_llm_workspace_mutation_classification():
+    router = RouteAgent(llm_client=FakeRouterLLM(task_type="workspace_mutation"))
 
     msg = router.run(
         conversation_id=1,
         step_index=1,
-        user_task="Write a poem in chat"
+        user_task="Write me a short story about a robot in a text file"
     )
 
-    assert msg.response["task_type"] == "direct_response"
-    assert "Standalone chat" in msg.response["routing_reason"]
+    assert msg.response["task_type"] == "workspace_mutation"
 
 
-def test_router_keeps_explicit_followup_as_contextual_followup():
+def test_router_trusts_llm_contextual_followup_classification():
     router = RouteAgent(llm_client=FakeRouterLLM(task_type="contextual_followup"))
 
     examples = [
-        "Write another poem",
+        "Write another version",
         "Continue it",
         "Make it shorter",
         "Do the same for Jake",
@@ -48,30 +47,7 @@ def test_router_keeps_explicit_followup_as_contextual_followup():
         assert msg.response["task_type"] == "contextual_followup"
 
 
-def test_direct_response_policy_does_not_use_memory_or_recent_messages_by_default():
-    route = WorkflowPolicyRegistry.build_route({
-        "task_type": "direct_response",
-        "confidence": 1.0,
-        "routing_reason": "standalone chat"
-    })
-
-    assert route["memory_mode"] == "none"
-    assert route["use_recent_messages"] is False
-
-
-def test_story_in_text_file_routes_to_workspace_mutation():
-    router = RouteAgent(llm_client=FakeRouterLLM(task_type="direct_response"))
-
-    msg = router.run(
-        conversation_id=1,
-        step_index=1,
-        user_task="Write me a short story about a robot learning friendship in a text file"
-    )
-
-    assert msg.response["task_type"] == "workspace_mutation"
-
-
-def test_story_without_file_phrase_routes_to_direct_response():
+def test_router_trusts_llm_direct_response_classification():
     router = RouteAgent(llm_client=FakeRouterLLM(task_type="direct_response"))
 
     msg = router.run(
@@ -83,32 +59,12 @@ def test_story_without_file_phrase_routes_to_direct_response():
     assert msg.response["task_type"] == "direct_response"
 
 
-def test_story_in_chat_routes_to_direct_response():
-    router = RouteAgent(llm_client=FakeRouterLLM(task_type="direct_response"))
-
-    msg = router.run(
-        conversation_id=1,
-        step_index=1,
-        user_task="Write a short story about a robot learning friendship in chat"
-    )
-
-    assert msg.response["task_type"] == "direct_response"
-
-
-def test_poem_in_text_file_routes_to_workspace_mutation():
-    router = RouteAgent(llm_client=FakeRouterLLM(task_type="direct_response"))
-
-    msg = router.run(
-        conversation_id=1,
-        step_index=1,
-        user_task="Write a poem in a text file"
-    )
-
-    assert msg.response["task_type"] == "workspace_mutation"
-
-
-def test_poem_in_chat_routes_to_direct_response():
-    router = RouteAgent(llm_client=FakeRouterLLM(task_type="contextual_followup"))
+def test_router_forces_direct_response_for_in_chat_requests():
+    """
+    The only deterministic override left: explicit chat requests must never
+    be turned into a file mutation, even if the LLM picked workspace_mutation.
+    """
+    router = RouteAgent(llm_client=FakeRouterLLM(task_type="workspace_mutation"))
 
     msg = router.run(
         conversation_id=1,
@@ -117,15 +73,32 @@ def test_poem_in_chat_routes_to_direct_response():
     )
 
     assert msg.response["task_type"] == "direct_response"
+    assert "in chat" in msg.response["routing_reason"].lower()
 
 
-def test_create_text_file_and_inside_it_write_routes_to_workspace_mutation():
+def test_router_does_not_upgrade_to_mutation_when_llm_says_direct_response():
+    """
+    Heavy keyword override that upgraded "in a file" phrases to
+    workspace_mutation has been removed. The LLM is now responsible for
+    that classification.
+    """
     router = RouteAgent(llm_client=FakeRouterLLM(task_type="direct_response"))
 
     msg = router.run(
         conversation_id=1,
         step_index=1,
-        user_task="Create a text file and inside it write Tristin"
+        user_task="Write a poem in a text file"
     )
 
-    assert msg.response["task_type"] == "workspace_mutation"
+    assert msg.response["task_type"] == "direct_response"
+
+
+def test_direct_response_policy_does_not_use_memory_or_recent_messages_by_default():
+    route = WorkflowPolicyRegistry.build_route({
+        "task_type": "direct_response",
+        "confidence": 1.0,
+        "routing_reason": "standalone chat"
+    })
+
+    assert route["memory_mode"] == "none"
+    assert route["use_recent_messages"] is False

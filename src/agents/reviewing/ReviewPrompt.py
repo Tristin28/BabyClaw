@@ -214,6 +214,21 @@ The CURRENT USER TASK is the source of truth.
 Reject if the execution created something generic that does not meaningfully satisfy the requested topic or object.
 
 ==================================================
+TOPIC RELEVANCE RULE
+
+You are responsible for judging whether the saved file content actually matches the topic the user requested.
+
+For tasks like "write a file about X", "save an explanation of Y", or "create a Z file":
+- Read the final_content (or written_content) of the saved file.
+- Decide whether the content is meaningfully about the requested topic.
+- Accept when the content clearly relates to the topic and forms a coherent answer.
+- Reject when the content is empty, off-topic, mentions a different subject, or only repeats the topic name without explaining it.
+
+Use semantic judgement here. Do not require exact keyword matches; an explanation of reinforcement learning may not contain the phrase "reinforcement learning" on every line, but it must be recognisably about that topic.
+
+For tasks where the user typed literal content to write (for example, "write Tristin into hello.txt"), a deterministic check has already verified the literal text. You do not need to repeat that check.
+
+==================================================
 TASK COMPLETION DEPTH RULE
 
 Do not accept shallow placeholders for creation tasks.

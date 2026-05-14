@@ -1,7 +1,7 @@
 from src.agents.BaseAgent import Agent
 from src.llm.OllamaClient import OllamaClient
 from src.core.message import Message
-import re
+
 
 class RouteAgent(Agent):
     SCHEMA = {
@@ -27,186 +27,121 @@ class RouteAgent(Agent):
 
 
     SYSTEM_PROMPT = """
-                You are the Routing Agent.
+You are the Routing Agent.
 
-                Your only job is to classify the user's CURRENT TASK.
+Your only job is to classify the user's CURRENT TASK.
 
-                You do not answer the user.
-                You do not plan.
-                You do not choose tools.
-                You do not decide permissions.
-                You only classify the task type.
+You do not answer the user.
+You do not plan.
+You do not choose tools.
+You do not decide permissions.
+You only classify the task type.
 
-                Choose exactly one task_type:
+Return only valid JSON.
 
-                1. direct_response
-                Use this for normal chat, explanations, advice, writing text in chat,
-                creative writing, drafting, rewriting, coding in chat, or answering questions.
+==================================================
+TASK TYPES
 
-                Creative writing, drafting, explaining, coding-in-chat, and normal
-                questions are direct_response unless the current task explicitly
-                refers to previous context or asks to save/write content into a file.
+Choose exactly one task_type:
 
-                Examples:
-                - explain recursion
-                - write me a letter
-                - write a poem in chat
-                - write a short story
-                - write a poem about Jake
-                - write bubble sort in Python
-                - what is reinforcement learning?
+1. direct_response
+Use for normal chat, explanations, advice, drafting text in chat, creative
+writing in chat, code in chat, and answering general questions.
 
-                2. memory_question
-                Use this when the user asks about remembered facts or preferences.
+Examples:
+- "what is reinforcement learning?" -> direct_response
+- "explain recursion" -> direct_response
+- "write a short poem about a robot" -> direct_response
+- "draft a polite email" -> direct_response
+- "write bubble sort in Python" -> direct_response
 
-                Examples:
-                - what is my name?
-                - what do you remember about me?
-                - what do you know about my project?
+2. memory_question
+Use when the user asks about remembered user facts or preferences.
 
-                3. contextual_followup
-                Use this only when the current task contains explicit
-                context-dependent language and cannot stand alone without previous
-                conversation.
+Examples:
+- "what is my name?" -> memory_question
+- "what do you remember about me?" -> memory_question
+- "what do you know about my project?" -> memory_question
 
-                Examples:
-                - continue
-                - continue it
-                - do the same thing again
-                - do the same for Jake
-                - another one
-                - write another poem
-                - make it shorter
-                - use the previous result
-                - use that file/result
-                - fix that
-                - explain it further
-                - write one about him/her/them when the referent only exists in previous conversation
+3. contextual_followup
+Use only when the current task explicitly depends on previous conversation
+or a previously generated answer/file. The task on its own would not be
+understandable.
 
-                4. workspace_read
-                Use this when the user wants to read, show, find, list, or search files/folders.
+Examples:
+- "make it shorter" -> contextual_followup
+- "continue from the previous answer" -> contextual_followup
+- "do the same for Jake" -> contextual_followup
+- "write another version" -> contextual_followup
+- "use the previous result" -> contextual_followup
+- "explain that further" -> contextual_followup
 
-                Examples:
-                - read notes.txt
-                - list the files
-                - find hello.txt
-                - search for TODO
+Do NOT use contextual_followup for standalone tasks that just happen to
+contain a pronoun. "What is it used for?" with no obvious referent is a
+direct_response, not a follow-up.
 
-                5. workspace_summarise
-                Use this when the user wants to summarise, explain, shorten, or describe an existing file.
+4. workspace_read
+Use when the user wants to read, show, open, view, list, find, or search
+files/folders in the workspace.
 
-                Examples:
-                - summarise notes.txt
-                - explain README.md
-                - shorten this file
+Examples:
+- "read notes.txt" -> workspace_read
+- "show me Coordinator.py" -> workspace_read
+- "list the files" -> workspace_read
+- "find hello.txt" -> workspace_read
+- "search for TODO" -> workspace_read
 
-                6. workspace_mutation
-                Use this when the user asks to create, save, write, append, edit, replace,
-                delete, move, copy, or rename files/folders.
+5. workspace_summarise
+Use when the user wants a summary, explanation, or short description of an
+existing file in the workspace.
 
-                Also use this when the user asks to generate/write content:
-                - in a text file
-                - into a text file
-                - in a file
-                - as a .txt file
-                - save it as a file
-                - put it in a file
-                Even if no exact filename is provided, this still means the user
-                wants a workspace file created or written.
+Examples:
+- "summarise notes.txt" -> workspace_summarise
+- "explain README.md" -> workspace_summarise
+- "shorten this file" -> workspace_summarise
 
-                Examples:
-                - create test.txt with hello
-                - write a short story in a text file
-                - write a poem in a text file
-                - save this as output.md
-                - append hello to notes.txt
-                - delete old.txt
-                - rename a.txt to b.txt
+6. workspace_mutation
+Use when the user asks to create, save, write, append, edit, replace,
+delete, move, copy, or rename files/folders, or to save generated content
+into a file.
 
-                Important:
-                - "write a letter" is direct_response unless the user asks to save it into a file.
-                - "write code" is direct_response unless the user asks to create/save a file.
-                - "write a poem in chat" is direct_response.
-                - "write a short story" is direct_response.
-                - "write a poem about Jake" is direct_response.
-                - "write a short story in a text file" is workspace_mutation.
-                - "write a poem in a text file" is workspace_mutation.
-                - Do not classify creative writing as contextual_followup just because
-                  previous conversation might contain useful inspiration.
-                - Only classify contextual_followup when the current task explicitly
-                  uses follow-up language such as continue, same, another, shorter,
-                  improve it, fix that, previous result, that file/result, explain it
-                  further, or unresolved pronouns like him/her/them.
-                - Do not infer file operations unless the user clearly asks for a file/folder/path operation.
+Examples:
+- "create a file called notes.txt" -> workspace_mutation
+- "write this into summary.txt" -> workspace_mutation
+- "save it as output.md" -> workspace_mutation
+- "append hello to notes.txt" -> workspace_mutation
+- "delete old.txt" -> workspace_mutation
+- "rename a.txt to b.txt" -> workspace_mutation
+- "write a poem in a text file" -> workspace_mutation
+- "create a text file and put my notes inside" -> workspace_mutation
 
-                Context is only used when the current user task explicitly depends on it.
+==================================================
+IMPORTANT RULES
 
-                Return only valid JSON.
-                """
+- Creative writing in chat is direct_response. Only switch to
+  workspace_mutation if the user clearly asks for a file/folder to be
+  created or written.
+- If the user explicitly says "in chat" or "display in chat", the answer
+  belongs in chat, not a file.
+- Do not infer file operations from generic verbs ("write", "make")
+  unless the task clearly mentions a file, folder, path, extension, or
+  saving.
+- contextual_followup is for tasks that genuinely need previous turns to
+  make sense. Do not pick it just because a pronoun appears.
+
+Return only valid JSON matching the schema.
+"""
 
     def __init__(self, llm_client: OllamaClient):
         super().__init__("router")
         self.llm_client = llm_client
 
-    def has_explicit_followup_language(self, user_task: str) -> bool:
-        task = " ".join(user_task.strip().lower().split())
-
-        direct_phrases = [
-            "continue",
-            "do the same",
-            "same thing",
-            "another one",
-            "another",
-            "shorter",
-            "longer",
-            "explain it further",
-            "explain that further",
-            "explain this further",
-            "write one about him",
-            "write one about her",
-            "write one about them",
-            "about him",
-            "about her",
-            "about them",
-        ]
-
-        pronouns = ["it", "that", "this", "them", "those"]
-
-        action_phrases = []
-        action_phrases += [f"make {p}" for p in pronouns]
-        action_phrases += [f"improve {p}" for p in pronouns]
-        action_phrases += [f"fix {p}" for p in pronouns]
-
-        previous_refs = [
-            "use previous result",
-            "use previous answer",
-            "use previous response",
-            "use previous one",
-            "use the previous result",
-            "use the previous answer",
-            "use the previous response",
-            "use the previous one",
-        ]
-
-        current_refs = [
-            "use that file",
-            "use that result",
-            "use that answer",
-            "use that response",
-            "use that one",
-            "use this file",
-            "use this result",
-            "use this answer",
-            "use this response",
-            "use this one",
-        ]
-
-        phrases = direct_phrases + action_phrases + previous_refs + current_refs
-
-        return contains_any(task, phrases)
-
-
     def explicitly_requests_chat(self, user_task: str) -> bool:
+        """
+        Conservative safety guard: when the user explicitly asks for the
+        answer in chat, the LLM should never route the task to a file
+        mutation. This is the only deterministic route override left.
+        """
         task = " ".join(user_task.strip().lower().split())
 
         chat_phrases = [
@@ -218,89 +153,32 @@ class RouteAgent(Agent):
             "display it in chat",
         ]
 
-        return contains_any(task, chat_phrases)
-
-
-    def explicitly_requests_file_output(self, user_task: str) -> bool:
-        if self.explicitly_requests_chat(user_task):
-            return False
-
-        task = " ".join(user_task.strip().lower().split())
-
-        file_output_phrases = [
-            "create a text file",
-            "create text file",
-            "create a file",
-            "create file",
-            "in a text file",
-            "into a text file",
-            "in a file",
-            "into a file",
-            "as a .txt file",
-            "as a txt file",
-            "save it as a file",
-            "save this as a file",
-            "save that as a file",
-            "save the result as a file",
-            "save the output as a file",
-            "put it in a file",
-            "put this in a file",
-            "put that in a file",
-            "put the result in a file",
-            "put the output in a file",
-        ]
-
-        if contains_any(task, file_output_phrases):
-            return True
-
-        file_action_patterns = [
-            ("create", "file"),
-            ("create", "text file"),
-            ("write", "inside it"),
-            ("write", "inside this"),
-            ("write", "inside that"),
-            ("write", "inside the file"),
-            ("write", "inside a file"),
-            ("write", "inside a text file"),
-        ]
-
-        return any(action in task and target in task for action, target in file_action_patterns)
+        return any(phrase in task for phrase in chat_phrases)
 
     def normalise_response(self, user_task: str, response: dict) -> dict:
         """
-            Guard against common router LLM drift.
+        Trust the LLM classification by default.
 
-            Contextual follow-up is only valid when the current task has explicit
-            context-dependent language. Standalone creative/chat tasks must remain
-            direct_response. Clear file-output phrasing must become
-            workspace_mutation even when no exact filename is provided.
+        The only deterministic override left is the chat guard: if the user
+        explicitly asked for the answer in chat, refuse any route that would
+        write to the workspace. Everything else (file vs chat, follow-up vs
+        standalone) is decided by the routing LLM.
         """
         if not isinstance(response, dict):
             return response
 
-        if self.explicitly_requests_file_output(user_task):
-            normalised = dict(response)
-            normalised["task_type"] = "workspace_mutation"
-            normalised["routing_reason"] = (
-                "The current task explicitly asks for generated content in a file; "
-                "using workspace_mutation."
-            )
-            normalised["confidence"] = max(float(normalised.get("confidence", 0.0)), 1.0)
-            return normalised
-
-        if response.get("task_type") != "contextual_followup":
+        if not self.explicitly_requests_chat(user_task):
             return response
 
-        if self.has_explicit_followup_language(user_task):
+        if response.get("task_type") == "direct_response":
             return response
 
         normalised = dict(response)
         normalised["task_type"] = "direct_response"
         normalised["routing_reason"] = (
-            "Standalone chat or creative-writing task without explicit follow-up language; "
-            "using direct_response."
+            "User explicitly asked for the answer in chat; forcing direct_response."
         )
-        normalised["confidence"] = min(float(normalised.get("confidence", 1.0)), 0.9)
+        normalised["confidence"] = max(float(normalised.get("confidence", 0.0)), 1.0)
         return normalised
 
     def build_messages(self, user_task: str) -> list[dict]:
@@ -329,12 +207,3 @@ class RouteAgent(Agent):
                                 receiver="coordinator", target_agent=None,
                                 message_type="route", status=status,
                                 response=response, visibility="internal")
-
-
-
-def contains_any(task: str, phrases: list[str]) -> bool:
-    return any(phrase in task for phrase in phrases)
-
-
-def contains_any_pair(task: str, prefixes: list[str], targets: list[str]) -> bool:
-    return any(f"{prefix} {target}" in task for prefix in prefixes for target in targets)

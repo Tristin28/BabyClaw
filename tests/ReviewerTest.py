@@ -406,9 +406,18 @@ def test_reviewer_accepts_hello_world_when_requested(tmp_path):
 
 
 def test_reviewer_rejects_written_file_when_proper_noun_topic_is_missing(tmp_path):
-    class RejectingReviewerLLM:
+    """
+    Topic relevance is now an LLM judgement (the brittle extract_about_topic
+    regex was removed). This test verifies the reviewer wraps the LLM's
+    rejection correctly.
+    """
+    class TopicMismatchReviewerLLM:
         def invoke_json(self, messages, stream=False, schema=None):
-            raise AssertionError("Deterministic topic check should reject before the LLM reviewer")
+            return {
+                "accepted": False,
+                "review_summary": "The file content is not about the requested topic.",
+                "issues": ["The poem is not about Malta."]
+            }
 
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
@@ -421,7 +430,7 @@ def test_reviewer_rejects_written_file_when_proper_noun_topic_is_missing(tmp_pat
     )
 
     reviewer = ReviewerAgent(
-        llm_client=RejectingReviewerLLM(),
+        llm_client=TopicMismatchReviewerLLM(),
         workspace_config=WorkspaceConfig(root=str(workspace_root))
     )
 
@@ -457,9 +466,7 @@ def test_reviewer_rejects_written_file_when_proper_noun_topic_is_missing(tmp_pat
 
     assert msg.status == "completed"
     assert msg.response["accepted"] is False
-    assert msg.response["issues"] == [
-        "The file was written, but the content does not match the requested topic 'Malta'."
-    ]
+    assert msg.response["issues"] == ["The poem is not about Malta."]
 
 
 def test_reviewer_allows_written_file_when_proper_noun_topic_is_present(tmp_path):

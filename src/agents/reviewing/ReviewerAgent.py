@@ -320,21 +320,6 @@ class ReviewerAgent(Agent):
 
         return issues
 
-    def extract_about_topic(self, user_task: str) -> str | None:
-        if not isinstance(user_task, str):
-            return None
-
-        match = re.search(
-            r"\babout\s+([A-Z][A-Za-z0-9_-]*(?:\s+[A-Z][A-Za-z0-9_-]*)*)",
-            user_task
-        )
-
-        if not match:
-            return None
-
-        topic = match.group(1).strip(" .,!?:;\"'")
-        return topic or None
-
     def extract_exact_written_text(self, user_task: str) -> str | None:
         if not isinstance(user_task, str):
             return None
@@ -400,22 +385,20 @@ class ReviewerAgent(Agent):
         return final_contents
 
     def deterministic_content_checks(self, user_task: str, review_evidence: dict) -> list[str]:
+        '''
+            Only the exact-text check remains here.
+
+            Topic-relevance ("is this file about X?") is a semantic question
+            and is now judged by the LLM reviewer using the REVIEWER_SYSTEM_PROMPT
+            rules. The exact-text check stays deterministic because it is a
+            safety pin: when the user literally typed the content to write,
+            the final file must contain that literal text.
+        '''
         issues = []
         final_contents = self.collect_available_final_file_contents(review_evidence=review_evidence)
 
         if not final_contents:
             return issues
-
-        topic = self.extract_about_topic(user_task)
-
-        if topic:
-            topic_pattern = re.compile(rf"\b{re.escape(topic)}\b", flags=re.IGNORECASE)
-
-            for item in final_contents:
-                if not topic_pattern.search(item["content"]):
-                    issues.append(
-                        f"The file was written, but the content does not match the requested topic '{topic}'."
-                    )
 
         exact_text = self.extract_exact_written_text(user_task)
 

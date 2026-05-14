@@ -14,21 +14,34 @@ class PlannerAgent(Agent):
         self.workspace_config = workspace_config
 
     def build_messages(self, planner_input: dict) -> list[dict]:
+        '''
+            Build the planner prompt with clearly labelled context layers.
+
+            Layered context (ZeroClaw-style):
+                A. PRIMARY GOAL: CURRENT USER TASK   (the only goal)
+                B. RESOLVED CONTEXT                  (pronouns -> concrete state)
+                C. RECENT CONVERSATION CONTEXT       (last user/assistant turns)
+                D. RELEVANT LONG-TERM MEMORY         (vector store)
+                E. WORKSPACE CONTEXT                 (files/folders + filename hints)
+                F. ROUTE / POLICY                    (allowed scope)
+                G. ALLOWED TOOLS                     (the only tools usable here)
+                H. HARD USER CONSTRAINTS             (locked paths)
+
+            Anything below A is supporting evidence only. If supporting
+            context conflicts with the current user task, the current user
+            task wins.
+        '''
         messages = [{"role": "system", "content": PlannerAgent.PLANNER_SYSTEM_PROMPT}]
 
-        sections = [f"Current task to plan:\n{planner_input['task']}"]
+        sections = [
+            "PRIMARY GOAL: CURRENT USER TASK (this is the only goal; "
+            "supporting context below must not replace it):\n"
+            f"{planner_input['task']}"
+        ]
 
-        route = planner_input.get("route", {})
-        if route:
-            sections.append(
-                f"COORDINATOR ROUTE (authoritative scope - do not exceed):\n"
-                f"task_type = {route.get('task_type')}\n"
-                f"memory_mode = {route.get('memory_mode')}\n"
-                f"use_recent_messages = {route.get('use_recent_messages')}\n"
-                f"use_workspace = {route.get('use_workspace')}\n\n"
-                f"The Coordinator already selected the only tools and context available. "
-                f"You must stay inside this route. Use only the available tools shown."
-            )
+        context_resolution = planner_input.get("context_resolution") or {}
+        if context_resolution.get("has_references"):
+            sections.append(self.build_context_resolution_section(context_resolution))
 
         if planner_input["k_recent_messages"]:
             recent_text = "\n".join(
@@ -36,14 +49,47 @@ class PlannerAgent(Agent):
                 for msg in planner_input["k_recent_messages"]
                 if msg.get("sender") in {"user", "assistant"} and msg.get("content")
             )
-            sections.append(f"Recent conversation (background only):\n{recent_text}")
+            if recent_text:
+                sections.append(
+                    "RECENT CONVERSATION CONTEXT (last user/assistant turns; "
+                    "use only when the current task clearly depends on them):\n"
+                    f"{recent_text}"
+                )
 
         if planner_input["context"]:
-            sections.append(f"Relevant memory:\n{planner_input['context']}")
+            sections.append(
+                "RELEVANT LONG-TERM MEMORY (use only when it directly helps "
+                "answer the current task):\n"
+                f"{planner_input['context']}"
+            )
 
-        context_resolution = planner_input.get("context_resolution") or {}
-        if context_resolution.get("has_references"):
-            sections.append(self.build_context_resolution_section(context_resolution))
+        if planner_input.get("workspace_contents"):
+            sections.append(
+                "WORKSPACE CONTEXT (files and folders currently inside the "
+                "workspace; use to locate the right file before planning):\n"
+                f"{planner_input['workspace_contents']}"
+            )
+
+        filename_hints = planner_input.get("filename_hints") or {}
+        if filename_hints:
+            sections.append(self.build_filename_hints_section(filename_hints))
+
+        route = planner_input.get("route", {})
+        if route:
+            sections.append(
+                "ROUTE / POLICY (authoritative scope - do not exceed):\n"
+                f"task_type = {route.get('task_type')}\n"
+                f"memory_mode = {route.get('memory_mode')}\n"
+                f"use_recent_messages = {route.get('use_recent_messages')}\n"
+                f"use_workspace = {route.get('use_workspace')}\n"
+                "The Coordinator already selected the only tools and context "
+                "available. Stay inside this route."
+            )
+
+        sections.append(
+            "ALLOWED TOOLS (you may only emit steps that use these tools):\n"
+            f"{planner_input['tools']}"
+        )
 
         requested_paths = planner_input.get("requested_paths") or []
         allowed_parent_dirs = planner_input.get("allowed_parent_dirs") or []
@@ -60,13 +106,42 @@ class PlannerAgent(Agent):
                 "- Do not use code.py, hello_world.py, main.py, output.py, or any other filename."
             )
 
-        sections.append(f"Available tools:\n{planner_input['tools']}")
-
-        if planner_input["workspace_contents"]:
-            sections.append(f"Workspace content:\n{planner_input['workspace_contents']}")
-
         messages.append({"role": "user", "content": "\n\n".join(sections)})
         return messages
+
+    def build_filename_hints_section(self, filename_hints: dict) -> str:
+        '''
+            Render Coordinator-resolved filename hints in a deterministic
+            block. Single-match hints map directly to the resolved relative
+            path. Multi-match hints surface alternatives so the planner can
+            ask for clarification rather than guessing.
+        '''
+        lines = [
+            "FILENAME RESOLUTION HINTS (Coordinator matched user-typed names "
+            "to real workspace files; use these resolved paths instead of "
+            "guessing):"
+        ]
+
+        for typed_name, resolution in filename_hints.items():
+            if isinstance(resolution, list):
+                joined = ", ".join(resolution)
+                lines.append(
+                    f"- '{typed_name}' is ambiguous; candidates: {joined}. "
+                    f"Ask the user for clarification rather than picking one."
+                )
+            else:
+                lines.append(f"- '{typed_name}' -> '{resolution}'")
+
+        lines.append(
+            "Rules:\n"
+            "- Treat single-match hints as the canonical path for that name.\n"
+            "- For ambiguous hints, plan a direct_response that asks the user "
+            "which file they meant rather than guessing.\n"
+            "- These hints never bypass workspace sandboxing; every path is "
+            "still validated by the compiler and runtime."
+        )
+
+        return "\n".join(lines)
     
     def build_context_resolution_section(self, context_resolution: dict) -> str:
         '''
