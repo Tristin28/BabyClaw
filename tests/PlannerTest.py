@@ -14,14 +14,16 @@ def make_compiler(tmp_path):
     )
 
 
-def make_compiler_for_task(tmp_path, user_task):
+def make_compiler_for_task(tmp_path, user_task, context="", required_content=""):
     workspace = WorkspaceConfig(root=str(tmp_path))
 
     return PlanCompiler(
         available_tools=PLANNER_TOOL_DESCRIPTIONS,
         workspace_config=workspace,
         route={"task_type": "workspace_mutation"},
-        user_task=user_task
+        user_task=user_task,
+        context=context,
+        required_content=required_content
     )
 
 
@@ -452,6 +454,131 @@ def test_multiple_explicit_paths_allow_move_source_and_destination(tmp_path):
 
     assert compiled["steps"][0]["args"]["source_path"] == "draft.txt"
     assert compiled["steps"][0]["args"]["destination_path"] == "final.txt"
+
+
+def test_natural_text_file_name_and_required_name_content_are_extracted(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create me a text file call it greetings and inside of it I just want my name written",
+        context="Known about the user:\nuser_fact:\n- The user's name is Tristin"
+    )
+
+    assert compiler.extract_explicit_file_paths(compiler.user_task) == ["greetings.txt"]
+    assert compiler.required_content == "Tristin"
+
+
+def test_natural_python_file_name_infers_py_extension(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create a python file called main"
+    )
+
+    assert compiler.extract_explicit_file_paths(compiler.user_task) == ["main.py"]
+
+
+def test_natural_markdown_file_name_infers_md_extension(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create a markdown file named notes"
+    )
+
+    assert compiler.extract_explicit_file_paths(compiler.user_task) == ["notes.md"]
+
+
+def test_generic_called_file_name_preserves_name_without_extension(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create a file called greetings"
+    )
+
+    assert compiler.extract_explicit_file_paths(compiler.user_task) == ["greetings"]
+
+
+def test_natural_requested_file_path_rejects_output_txt(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create me a text file call it greetings and inside of it I just want my name written",
+        context="Known about the user:\nuser_fact:\n- The user's name is Tristin"
+    )
+
+    plan = {
+        "goal": "Create wrong file",
+        "steps": [
+            {
+                "id": 1,
+                "tool": "write_file",
+                "args": {
+                    "path": "output.txt",
+                    "content": "Tristin"
+                }
+            }
+        ],
+        "planning_rationale": "Bad path drift."
+    }
+
+    with pytest.raises(ValueError, match="planned mutation path 'output.txt' does not match requested path 'greetings.txt'"):
+        compiler.compile(plan)
+
+
+def test_required_name_content_rejects_hello_world(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create me a text file call it greetings and inside of it I just want my name written",
+        context="Known about the user:\nuser_fact:\n- The user's name is Tristin"
+    )
+
+    plan = {
+        "goal": "Create wrong content",
+        "steps": [
+            {
+                "id": 1,
+                "tool": "write_file",
+                "args": {
+                    "path": "greetings.txt",
+                    "content": "Hello, World!"
+                }
+            }
+        ],
+        "planning_rationale": "Bad content drift."
+    }
+
+    with pytest.raises(ValueError, match="required content 'Tristin' is missing"):
+        compiler.compile(plan)
+
+
+def test_required_name_content_allows_generation_prompt_that_includes_name(tmp_path):
+    compiler = make_compiler_for_task(
+        tmp_path,
+        "Create me a text file call it greetings and inside of it I just want my name written",
+        context="Known about the user:\nuser_fact:\n- The user's name is Tristin"
+    )
+
+    plan = {
+        "goal": "Create requested file with generated content",
+        "steps": [
+            {
+                "id": 1,
+                "tool": "generate_content",
+                "args": {
+                    "prompt": "Output only this name: Tristin"
+                }
+            },
+            {
+                "id": 2,
+                "tool": "create_file",
+                "args": {
+                    "path": "greetings.txt",
+                    "content_step": 1
+                }
+            }
+        ],
+        "planning_rationale": "Generate the required name then write it."
+    }
+
+    compiled = compiler.compile(plan)
+
+    assert compiled["steps"][1]["args"]["path"] == "greetings.txt"
+    assert compiled["steps"][1]["args"]["content_step"] == 1
 
 
 def test_exact_write_text_is_enforced_when_planner_substitutes_content(tmp_path):

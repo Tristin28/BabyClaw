@@ -23,7 +23,6 @@ from src.core.context.ActiveContext import ActiveContext
 from src.core.workflow.Coordinator import Coordinator
 from src.core.message import Message
 from src.tools.file_tools import (
-    create_file,
     delete_file,
     move_path,
     replace_text,

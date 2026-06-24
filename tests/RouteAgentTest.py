@@ -1,5 +1,6 @@
 from src.agents.routing.RouteAgent import RouteAgent
 from src.agents.routing.WorkflowPolicy import WorkflowPolicyRegistry
+import pytest
 
 
 class FakeRouterLLM:
@@ -21,6 +22,46 @@ def test_router_trusts_llm_workspace_mutation_classification():
         conversation_id=1,
         step_index=1,
         user_task="Write me a short story about a robot in a text file"
+    )
+
+    assert msg.response["task_type"] == "workspace_mutation"
+
+
+@pytest.mark.parametrize("user_task", [
+    "write me an email to my friend",
+    "write me a description I can add in my bio",
+    "write a Python function",
+    "create a short paragraph about AI",
+    "summarise this text",
+])
+def test_router_downgrades_workspace_mutation_without_explicit_workspace_side_effect(user_task):
+    router = RouteAgent(llm_client=FakeRouterLLM(task_type="workspace_mutation"))
+
+    msg = router.run(
+        conversation_id=1,
+        step_index=1,
+        user_task=user_task
+    )
+
+    assert msg.response["task_type"] == "direct_response"
+    assert "did not explicitly request" in msg.response["routing_reason"].lower()
+
+
+@pytest.mark.parametrize("user_task", [
+    "write this to bio.txt",
+    "create a file called bio.txt",
+    "append this to notes.md",
+    "delete old_report.txt",
+    "rename draft.md to final_draft.md",
+    "save this inside the workspace",
+])
+def test_router_allows_workspace_mutation_with_explicit_workspace_side_effect(user_task):
+    router = RouteAgent(llm_client=FakeRouterLLM(task_type="workspace_mutation"))
+
+    msg = router.run(
+        conversation_id=1,
+        step_index=1,
+        user_task=user_task
     )
 
     assert msg.response["task_type"] == "workspace_mutation"

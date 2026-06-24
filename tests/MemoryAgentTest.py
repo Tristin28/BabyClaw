@@ -4,6 +4,68 @@ from src.agents.memory.MemoryAgent import MemoryAgent
 from src.core.message import Message
 
 
+def test_memory_prompt_uses_general_extraction_guide():
+    agent = MemoryAgent.__new__(MemoryAgent)
+
+    messages = agent.build_messages(
+        "append to greetings.txt and say my surname which is Bezzina"
+    )
+
+    system_prompt = messages[0]["content"]
+    user_prompt = messages[1]["content"]
+
+    assert "GENERAL EXTRACTION GUIDE" in system_prompt
+    assert "identity attributes: name, surname" in system_prompt
+    assert '"my <attribute> which is <value>"' in system_prompt
+    assert "relationship_<role>" in system_prompt
+    assert "The user's surname is Bezzina." in system_prompt
+    assert "ignore the task instruction" in system_prompt
+    assert "append to greetings.txt and say my surname which is Bezzina" in user_prompt
+
+
+def test_memory_validation_accepts_general_identity_fact():
+    agent = MemoryAgent.__new__(MemoryAgent)
+
+    memories = agent.validate_llm_response({
+        "should_store": True,
+        "memories": [
+            {
+                "memory_type": "user_fact",
+                "topic": "identity_surname",
+                "content": "The user's surname is Bezzina.",
+                "confidence": 0.95,
+            }
+        ],
+    })
+
+    assert memories == [
+        {
+            "memory_type": "user_fact",
+            "topic": "identity_surname",
+            "content": "The user's surname is Bezzina.",
+            "confidence": 0.95,
+        }
+    ]
+
+
+def test_memory_rejection_keeps_task_details_out_but_allows_surname_fact():
+    agent = MemoryAgent.__new__(MemoryAgent)
+
+    assert not agent.should_reject_memory({
+        "memory_type": "user_fact",
+        "topic": "identity_surname",
+        "content": "The user's surname is Bezzina.",
+        "confidence": 0.95,
+    })
+
+    assert agent.should_reject_memory({
+        "memory_type": "user_fact",
+        "topic": "temporary_file",
+        "content": "The user created a file named greetings.txt.",
+        "confidence": 0.95,
+    })
+
+
 def main():
     db_path = Path(__file__).resolve().parents[1] / "babyclaw.db"
 

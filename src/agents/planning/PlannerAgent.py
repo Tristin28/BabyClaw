@@ -93,17 +93,35 @@ class PlannerAgent(Agent):
 
         requested_paths = planner_input.get("requested_paths") or []
         allowed_parent_dirs = planner_input.get("allowed_parent_dirs") or []
+        required_content = planner_input.get("required_content") or ""
 
-        if requested_paths:
+        if requested_paths or required_content:
+            constraint_lines = ["HARD USER CONSTRAINTS:"]
+
+            if requested_paths:
+                constraint_lines.extend([
+                    f"requested_paths = {requested_paths}",
+                    f"allowed_parent_dirs = {allowed_parent_dirs}",
+                    "",
+                    "Path rules:",
+                    "- You must use these exact requested paths for file mutations.",
+                    "- You may only create parent directories listed in allowed_parent_dirs.",
+                    "- Do not infer, rename, simplify, or replace requested paths.",
+                    "- Do not use code.py, hello_world.py, main.py, output.py, or any other filename.",
+                ])
+
+            if required_content:
+                constraint_lines.extend([
+                    f"required_content = {required_content!r}",
+                    "",
+                    "Content rules:",
+                    "- File-writing steps must include required_content in direct content.",
+                    "- If content is generated first, the generate_content prompt must explicitly include required_content.",
+                    "- Do not replace required_content with placeholders, generic examples, or unrelated text.",
+                ])
+
             sections.append(
-                "HARD USER CONSTRAINTS:\n"
-                f"requested_paths = {requested_paths}\n"
-                f"allowed_parent_dirs = {allowed_parent_dirs}\n\n"
-                "Rules:\n"
-                "- You must use these exact requested paths for file mutations.\n"
-                "- You may only create parent directories listed in allowed_parent_dirs.\n"
-                "- Do not infer, rename, simplify, or replace requested paths.\n"
-                "- Do not use code.py, hello_world.py, main.py, output.py, or any other filename."
+                "\n".join(constraint_lines)
             )
 
         messages.append({"role": "user", "content": "\n\n".join(sections)})
@@ -265,7 +283,9 @@ class PlannerAgent(Agent):
                 workspace_config=self.workspace_config,
                 route=planner_input.get("route", {}),
                 user_task=planner_input["task"],
-                context_resolution=planner_input.get("context_resolution") or {}
+                context_resolution=planner_input.get("context_resolution") or {},
+                context=planner_input.get("context", ""),
+                required_content=planner_input.get("required_content", "")
             )
             response = compiler.compile(raw_response)
 

@@ -273,7 +273,9 @@ PLANNER_TOOL_DESCRIPTIONS = [
     make_tool_description(
         name="append_file",
         description=(
-            "Append text to the end of an existing or new file without replacing existing content. "
+            "Append text to the end of an existing workspace file without replacing existing content. "
+            "The target path must already exist and must be a file. "
+            "append_file never creates files or parent directories and fails when the target is missing or is not a file. "
             "Use this when the user says append, add to the end, add below, continue the file, or preserve existing content while adding new content. "
             "If the user directly provides the appended text, pass it directly as content. "
             "If the appended content must be generated, first use generate_content, then append_file with content_step. "

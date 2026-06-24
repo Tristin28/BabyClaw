@@ -18,9 +18,17 @@ class PlanCompiler:
 
     MUTATION_TOOLS = MUTATION_TOOLS
     MUTATION_PATH_ARGS = MUTATION_PATH_ARGS
+    FILE_TYPE_EXTENSIONS = {
+        "text": ".txt",
+        "python": ".py",
+        "markdown": ".md",
+        "json": ".json",
+        "csv": ".csv",
+        "html": ".html",
+    }
 
     def __init__(self, available_tools: list[dict], workspace_config: WorkspaceConfig = None, route: dict = None, 
-                 user_task: str = "", context_resolution: dict = None):
+                 user_task: str = "", context_resolution: dict = None, context: str = "", required_content: str = ""):
         """
         available_tools should be the same planner-facing tool descriptions
         given to the PlannerAgent.
@@ -33,6 +41,11 @@ class PlanCompiler:
         self.route = route
         self.user_task = user_task or ""
         self.context_resolution = context_resolution or {}
+        self.context = context or ""
+        self.required_content = required_content or self.extract_required_content(
+            user_task=self.user_task,
+            context=self.context
+        )
         self.tool_names = {
             tool["name"]
             for tool in available_tools
@@ -130,10 +143,11 @@ class PlanCompiler:
 
     def extract_explicit_file_paths(self, user_task: str) -> list[str]:
         """
-            Extract explicit file paths from the user task.
+            Extract user-requested file paths from the task.
 
-            This intentionally looks for file-like paths with an extension, including
-            quoted names containing spaces. It does not infer generic directories.
+            This includes explicit file-like paths with extensions and natural
+            naming phrases like "text file called greetings", which becomes
+            greetings.txt.
         """
         if not isinstance(user_task, str) or user_task.strip() == "":
             return []
@@ -162,7 +176,79 @@ class PlanCompiler:
                     explicit_paths.append(candidate)
                     seen.add(candidate)
 
+        for candidate in self.extract_natural_file_names(user_task):
+            if candidate not in seen:
+                explicit_paths.append(candidate)
+                seen.add(candidate)
+
         return explicit_paths
+    
+    def extract_natural_file_names(self, user_task: str) -> list[str]:
+        if not isinstance(user_task, str) or user_task.strip() == "":
+            return []
+
+        file_type = r"(?:(text|python|markdown|json|csv|html)\s+)?"
+        name = r"([\"'][^\"']+[\"']|[A-Za-z0-9_ ./-]+?)"
+        end = r"(?=\s+(?:and|with|containing|inside|that|where|which|to)\b|[.!?,;:]|$)"
+
+        patterns = [
+            re.compile(rf"\b{file_type}file\s+(?:called|named)\s+{name}{end}", re.IGNORECASE),
+            re.compile(rf"\b{file_type}file\s+(?:call|name)\s+it\s+{name}{end}", re.IGNORECASE),
+            re.compile(rf"\b(?:call|name)\s+it\s+{name}{end}", re.IGNORECASE),
+        ]
+
+        results = []
+        seen = set()
+        task_file_type = self.detect_file_type(user_task)
+
+        for pattern in patterns:
+            for match in pattern.finditer(user_task):
+                match_groups = match.groups()
+                explicit_type = match_groups[0] if len(match_groups) > 1 else None
+                raw_name = match_groups[-1]
+                extension = self.FILE_TYPE_EXTENSIONS.get(
+                    (explicit_type or task_file_type or "").lower(),
+                    ""
+                )
+                candidate = self.normalise_named_file(raw_name=raw_name, extension=extension)
+
+                if not candidate:
+                    continue
+
+                if candidate.startswith("/") or candidate.startswith("../") or "/../" in candidate:
+                    continue
+
+                if candidate not in seen:
+                    results.append(candidate)
+                    seen.add(candidate)
+
+        return results
+    
+    def detect_file_type(self, user_task: str) -> str:
+        task = " ".join(user_task.lower().split())
+
+        for file_type in self.FILE_TYPE_EXTENSIONS:
+            if re.search(rf"\b{file_type}\s+file\b", task):
+                return file_type
+
+        return ""
+    
+    def normalise_named_file(self, raw_name: str, extension: str = "") -> str:
+        if not isinstance(raw_name, str):
+            return ""
+
+        cleaned = raw_name.strip().strip("\"'`.,;:!?)]}")
+        cleaned = re.sub(r"^(?:a|an|the)\s+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = self.normalise_relative_path_text(cleaned)
+
+        if not cleaned:
+            return ""
+
+        suffix = PurePosixPath(cleaned).suffix
+        if extension and not suffix:
+            cleaned = f"{cleaned}{extension}"
+
+        return cleaned
 
     def allowed_paths_for_requested_files(self, requested_paths: list[str]) -> set[str]:
         allowed_paths = set()
@@ -221,6 +307,52 @@ class PlanCompiler:
                 f"Plan rejected: planned mutation path '{planned_path}' "
                 f"does not match requested path '{requested_path_text}'."
             )
+        
+    def task_requires_user_name_content(self, user_task: str) -> bool:
+        if not isinstance(user_task, str):
+            return False
+
+        task = " ".join(user_task.lower().split())
+
+        patterns = [
+            r"\binside(?:\s+of)?\s+(?:it|this|that|the\s+file)\b.*\bmy\s+name\b",
+            r"\bwith\s+my\s+name\b",
+            r"\bthat\s+says\s+my\s+name\b",
+            r"\bcontaining\s+my\s+name\b",
+            r"\bwrite\s+my\s+name\b",
+            r"\bmy\s+name\s+written\b",
+        ]
+
+        return any(re.search(pattern, task) for pattern in patterns)
+    
+    def extract_user_name_from_text(self, text: str) -> str:
+        if not isinstance(text, str) or not text.strip():
+            return ""
+
+        patterns = [
+            r"\bmy\s+name\s+is\s+([A-Za-z][A-Za-z' -]{0,80}?)(?=\s+(?:and|now|please|then)\b|[.!,?;\n]|$)",
+            r"\b(?:the\s+)?user'?s\s+name\s+is\s+([A-Za-z][A-Za-z' -]{0,80}?)(?=\s+(?:and|now|please|then)\b|[.!,?;\n]|$)",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if not match:
+                continue
+
+            name = match.group(1).strip(" .,!?:;\"'")
+            if name:
+                return name
+
+        return ""
+    
+    def extract_required_content(self, user_task: str, context: str = "") -> str:
+        if not self.task_requires_user_name_content(user_task):
+            return ""
+
+        return (
+            self.extract_user_name_from_text(user_task)
+            or self.extract_user_name_from_text(context)
+        )
                 
     def apply_safe_defaults(self, steps: list[dict]) -> list[dict]:
         '''
@@ -395,6 +527,8 @@ class PlanCompiler:
             if lowered_text in CONTEXTUAL_REFERENCE_PHRASES:
                 continue
 
+            if lowered_text in {"my name", "the user's name", "user name", "username"}:
+                continue
 
             return text
 
@@ -470,6 +604,89 @@ class PlanCompiler:
 
             args["content"] = resolved_content
             step["args"] = args
+            
+    def validate_required_content(self, steps: list[dict]) -> None:
+        required_content = self.required_content
+
+        if not isinstance(required_content, str) or required_content.strip() == "":
+            return
+
+        required_lower = required_content.strip().lower()
+        content_tools = {"create_file", "write_file", "append_file"}
+        steps_by_id = {
+            step["id"]: step
+            for step in steps
+        }
+
+        for step in steps:
+            if step.get("tool") not in content_tools:
+                continue
+
+            args = step.get("args", {})
+
+            if "content_step" in args:
+                source_step = steps_by_id.get(args["content_step"])
+                source_prompt = ""
+
+                if source_step and source_step.get("tool") == "generate_content":
+                    source_prompt = source_step.get("args", {}).get("prompt", "")
+
+                if required_lower in str(source_prompt).lower():
+                    continue
+
+                raise ValueError(
+                    f"Plan rejected: required content '{required_content}' must be included "
+                    f"in the generation prompt used by step {step['id']}."
+                )
+
+            content = args.get("content")
+
+            # Allow an empty create_file step only when a later content-writing
+            # step for the same path can still satisfy the required content.
+            if step.get("tool") == "create_file" and isinstance(content, str) and content.strip() == "":
+                if self.later_step_can_satisfy_required_content(step=step, steps=steps, required_content=required_content):
+                    continue
+
+            if required_lower not in str(content).lower():
+                raise ValueError(
+                    f"Plan rejected: required content '{required_content}' is missing from "
+                    f"step {step['id']} tool '{step['tool']}'."
+                )
+            
+    def later_step_can_satisfy_required_content(self, step: dict, steps: list[dict], required_content: str) -> bool:
+        path = step.get("args", {}).get("path")
+
+        if not isinstance(path, str) or path.strip() == "":
+            return False
+
+        for later in steps:
+            if later["id"] <= step["id"]:
+                continue
+
+            if later.get("tool") not in {"write_file", "append_file", "create_file"}:
+                continue
+
+            later_args = later.get("args", {})
+            if later_args.get("path") != path:
+                continue
+
+            if "content_step" in later_args:
+                source_step = {
+                    candidate["id"]: candidate
+                    for candidate in steps
+                }.get(later_args["content_step"])
+                source_prompt = ""
+
+                if source_step and source_step.get("tool") == "generate_content":
+                    source_prompt = source_step.get("args", {}).get("prompt", "")
+
+                if required_content.lower() in str(source_prompt).lower():
+                    return True
+
+            if required_content.lower() in str(later_args.get("content", "")).lower():
+                return True
+
+        return False
                     
     def compile(self, raw_plan: dict) -> dict:
         self.validate_top_level_schema(raw_plan)
@@ -489,6 +706,7 @@ class PlanCompiler:
         self.validate_workspace_paths(normalised_steps)
         self.validate_explicit_mutation_paths(normalised_steps)
         self.validate_required_args_present(normalised_steps)
+        self.validate_required_content(normalised_steps)
 
         normalised_steps = self.infer_dependencies_from_step_args(normalised_steps)
         self.validate_dependencies(normalised_steps)

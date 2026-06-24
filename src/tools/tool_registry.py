@@ -87,7 +87,7 @@ def build_tool_registry(llm_client: OllamaClient, workspace: WorkspaceConfig) ->
 
         "append_file": make_tool_registry_entry(
             func=lambda path, content: append_file(workspace, path, content),
-            description="Appends content to an existing or new file inside the active workspace sandbox.",
+            description="Appends content to an existing file inside the active workspace sandbox; fails if the target is missing or is not a file.",
             input_map={
                 "path": "path",
                 "content": "content"

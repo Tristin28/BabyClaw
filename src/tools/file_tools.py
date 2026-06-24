@@ -96,7 +96,15 @@ def write_file(workspace: WorkspaceConfig, path: str, content: str) -> str:
 def append_file(workspace: WorkspaceConfig, path: str, content: str) -> str:
     file_path = workspace.resolve_workspace_path(path)
 
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    if not file_path.exists():
+        raise FileNotFoundError(
+            f"File '{path}' does not exist; append_file only appends to existing files."
+        )
+
+    if not file_path.is_file():
+        raise ValueError(
+            f"Path '{path}' exists but is not a file; append_file only appends to files."
+        )
 
     with open(file_path, "a", encoding="utf-8") as f:
         f.write(content)

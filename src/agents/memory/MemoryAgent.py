@@ -31,7 +31,7 @@ class MemoryAgent(Agent):
                             },
                             "topic":{
                                  "type": "string",
-                                 "description": "A short reusable label describing what this memory is about (e.g. current_project, tools_used, explanation_style, learning_goal). Use lowercase snake_case and avoid full sentences."
+                                 "description": "A short reusable label describing what this memory is about (e.g. identity_surname, relationship_friend, current_project, explanation_style, learning_goal). Use lowercase snake_case and avoid full sentences."
                             },
                             "content": {
                                 "type": "string",
@@ -250,28 +250,48 @@ class MemoryAgent(Agent):
 
                                 Only store information that the user literally stated in the user task.
 
-                                CRITICAL RULES FOR USER FACTS:
-                                - A noun on its own is USELESS. Always store the relationship or role with the name.
-                                -   Example: WRONG: content="Jake", topic=friend_name
-                                             RIGHT: content="Jake is the user's friend", topic=friend_jake
-                                             WRONG: content="John", topic=professor
-                                             RIGHT: content="John is the user's professor", topic=professor_john
+                                GENERAL EXTRACTION GUIDE:
+                                Store stable facts and preferences that would still be useful in future conversations.
 
-                                - If the user says "my friend <NAME>", store: "<NAME> is the user's friend".
-                                - If the user says "my professor <NAME>", store: "<NAME> is the user's professor".
-                                - If you cannot identify the relationship/role from the user's text, do NOT store the name.
+                                Stable user facts include explicitly stated durable information about the user, such as:
+                                - identity attributes: name, surname, age, location, school, job, role, course, project, team, language, contact detail
+                                - relationships: friend, professor, teacher, colleague, teammate, manager, family member
+                                - durable personal context: current project, learning goal, usual toolset, domain, long-term interest
 
-                                The content field must be a complete sentence that makes sense on its own when retrieved months later.
+                                Stable user preferences include explicit preferences about how the user wants things done, such as:
+                                - explanation style
+                                - preferred language/framework/tool
+                                - formatting preference
+                                - communication preference
+
+                                Common fact patterns:
+                                - "my <attribute> is <value>"
+                                - "my <attribute> which is <value>"
+                                - "I am <role/value>"
+                                - "I live in <place>"
+                                - "I study <subject>"
+                                - "I work as <role>"
+                                - "my <relationship> is <name>"
+                                - "my <relationship> <name>"
+
+                                Normalise stored facts:
+                                - topic should be a short lowercase snake_case label, preferably identity_<attribute>, relationship_<role>, project_<topic>, or preference_<topic>.
+                                - content must be a complete sentence that makes sense on its own months later.
+                                - content must describe the relationship or attribute, not just a noun.
+                                - Good: "The user's surname is Bezzina."
+                                - Good: "Jake is the user's friend."
+                                - Bad: "Bezzina"
+                                - Bad: "Jake"
 
                                 Allowed memory types:
 
                                 1. user_fact
                                 - Stable facts explicitly stated by the user.
-                                - Example: "my name is Tristin" -> user_fact, topic=user_name
+                                - Use for identity, relationship, project, role, school, location, and other durable context.
 
                                 2. user_preference
                                 - Stable preferences explicitly stated by the user.
-                                - Example: "I prefer short explanations" -> user_preference, topic=explanation_style
+                                - Use only when the user explicitly expresses a preference, not when a single task merely implies one.
 
                                 Do NOT store:
                                 - task lessons
@@ -291,6 +311,7 @@ class MemoryAgent(Agent):
                                 2. If the user did not explicitly state a stable fact/preference, return should_store=false and memories=[].
                                 3. Each memory must be short and reusable.
                                 4. The memory content must be grounded in the exact user task.
+                                5. If the user message contains both a task and a stable fact/preference, store only the stable fact/preference and ignore the task instruction.
 
                                 A user message may contain two kinds of information:
 

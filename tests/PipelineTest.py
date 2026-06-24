@@ -37,6 +37,11 @@ class FakeMemory:
         )
 
 
+class FakeMemoryWithUserName(FakeMemory):
+    def get_memory_by_mode(self, task: str, mode: str, k: int = 5, allowed_memory_types=None):
+        return "Known about the user:\nuser_fact:\n- The user's name is Tristin"
+
+
 class FakePlanner:
     """
     First plan intentionally hallucinates an extra workspace mutation.
@@ -509,6 +514,65 @@ def test_planning_retry_feedback_preserves_explicit_requested_path(tmp_path):
     assert steps[0]["args"]["path"] == "src"
     assert steps[1]["tool"] == "create_file"
     assert steps[1]["args"]["path"] == "src/main.py"
+
+
+def test_planner_input_extracts_natural_path_and_required_name_content(tmp_path):
+    from src.agents.planning.PlannerAgent import PlannerAgent
+
+    class DummyLLM:
+        def invoke_json(self, messages, stream=False, schema=None):
+            return {
+                "goal": "unused",
+                "steps": [
+                    {
+                        "id": 1,
+                        "tool": "create_file",
+                        "args": {"path": "greetings.txt", "content": "Tristin"}
+                    }
+                ],
+                "planning_rationale": "unused"
+            }
+
+        def invoke_text(self, messages, stream=False):
+            return "unused"
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    workspace = WorkspaceConfig(root=str(workspace_root))
+    llm = DummyLLM()
+    tool_registry = build_tool_registry(llm_client=llm, workspace=workspace)
+
+    coordinator = Coordinator(
+        planner=PlannerAgent(llm_client=llm, workspace_config=workspace),
+        executor=ExecutorAgent(tool_registry=tool_registry),
+        reviewer=FakeReviewer(),
+        memory=FakeMemoryWithUserName(),
+        planner_tool_descriptions=PLANNER_TOOL_DESCRIPTIONS,
+        tool_registry=tool_registry,
+        llm_client=llm,
+        router=FakeRouter()
+    )
+
+    route = WorkflowPolicyRegistry.build_route({
+        "task_type": "workspace_mutation",
+        "confidence": 1.0,
+        "routing_reason": "test"
+    })
+    planner_input = coordinator.build_planner_input(
+        user_task="Create me a text file call it greetings and inside of it I just want my name written",
+        route=route,
+        conversation_id=1,
+        step_index=2
+    )
+
+    assert planner_input["requested_paths"] == ["greetings.txt"]
+    assert planner_input["allowed_parent_dirs"] == []
+    assert planner_input["required_content"] == "Tristin"
+
+    planner_prompt = coordinator.planner.build_messages(planner_input)[-1]["content"]
+
+    assert "requested_paths = ['greetings.txt']" in planner_prompt
+    assert "required_content = 'Tristin'" in planner_prompt
 
 
 def test_planning_retry_feedback_explains_fake_content_step_string(tmp_path):

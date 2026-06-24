@@ -253,6 +253,12 @@ class Coordinator():
         scoped_workspace_contents = self.build_scoped_workspace_contents(route)
         filename_hints = self.build_filename_hints(user_task=user_task, workspace_contents=scoped_workspace_contents, route=route)
         requested_paths, allowed_parent_dirs = self.extract_requested_path_constraints(user_task=user_task, route=route, selected_tools=selected_tools)
+        required_content = self.extract_required_content_constraint(
+            user_task=user_task,
+            route=route,
+            selected_tools=selected_tools,
+            context=scoped_context
+        )
 
         return {
             "task": user_task,
@@ -263,6 +269,7 @@ class Coordinator():
             "filename_hints": filename_hints,
             "requested_paths": requested_paths,
             "allowed_parent_dirs": allowed_parent_dirs,
+            "required_content": required_content,
             "route": route,
             "conversation_id": conversation_id,
             "step_index": step_index,
@@ -285,6 +292,20 @@ class Coordinator():
         allowed_parent_dirs = sorted(path for path in allowed_paths if path not in set(requested_paths))
 
         return requested_paths, allowed_parent_dirs
+    
+    def extract_required_content_constraint(self, user_task: str, route: dict, selected_tools: list[dict], context: str) -> str:
+        if route.get("task_type") != "workspace_mutation":
+            return ""
+
+        content_helper = PlanCompiler(
+            available_tools=selected_tools,
+            workspace_config=None,
+            route=route,
+            user_task=user_task,
+            context=context
+        )
+
+        return content_helper.required_content
 
     """
         Planning retry behaviour that turns compiler failures into focused replan feedback.
