@@ -38,7 +38,7 @@ class Coordinator():
 
     def __init__(self, planner: PlannerAgent, executor: ExecutorAgent, reviewer: ReviewerAgent,
                  memory: MemoryAgent, router: RouteAgent, planner_tool_descriptions: list[dict], tool_registry: dict, llm_client: OllamaClient,
-                 execution_verifier: ExecutionVerifier = None, workspace_config: WorkspaceConfig = None):
+                 execution_verifier: ExecutionVerifier, workspace_config: WorkspaceConfig=None):
         self.planner = planner
         self.planner_tool_descriptions = planner_tool_descriptions
         self.executor = executor
